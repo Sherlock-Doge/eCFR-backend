@@ -1,52 +1,52 @@
 const express = require("express");
-const cors = require("cors");
 const axios = require("axios");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-app.use(cors());
-
 const BASE_API = "https://www.ecfr.gov/api/versioner/v1";
+const ADMIN_API = "https://www.ecfr.gov/api/admin/v1";
 
-// Helper function to count words in a given text
-function countWords(text) {
-    if (!text) return 0;
-    return text.split(/\s+/).filter(word => word.length > 0).length;
-}
-
-// ✅ Fetch Titles with Full Hierarchy (Chapters, Subchapters, Parts)
+// ✅ Fetch Titles with Full Hierarchy (Title → Subtitle → Chapter → Subchapter → Part → Section)
 app.get("/api/titles", async (req, res) => {
     try {
-        const today = new Date().toISOString().split("T")[0]; // Get today's date in YYYY-MM-DD format
+        const today = new Date().toISOString().split("T")[0]; // Get current date YYYY-MM-DD
         const response = await axios.get(`${BASE_API}/titles.json`);
         const titles = response.data.titles;
 
-        // Fetch full structure for each title
-        const structurePromises = titles.map(async (title) => {
+        // Fetch hierarchy & structure for each title
+        const hierarchyPromises = titles.map(async (title) => {
             try {
-                console.log(`🔍 Fetching full structure for Title ${title.number}...`);
-                const structureResponse = await axios.get(`${BASE_API}/structure/${today}/title-${title.number}.json`);
+                console.log(`🔍 Fetching full hierarchy for Title ${title.number}...`);
 
-                if (!structureResponse.data || !structureResponse.data.children) {
-                    console.warn(`⚠️ No hierarchy found for Title ${title.number}`);
-                }
+                // Get Full Hierarchy (Ancestry)
+                const ancestryResponse = await axios.get(`${BASE_API}/ancestry/${today}/title-${title.number}.json`);
+                
+                // Get Structure Data
+                const structureResponse = await axios.get(`${BASE_API}/structure/${today}/title-${title.number}.json`);
 
                 return {
                     ...title,
-                    hierarchy: structureResponse.data.children || [] // Store full hierarchy if available
+                    hierarchy: ancestryResponse.data || [],
+                    structure: structureResponse.data || []
                 };
             } catch (error) {
-                console.warn(`⚠️ Failed to fetch structure for Title ${title.number}`);
-                return { ...title, hierarchy: [] }; // Keep going even if one title fails
+                console.warn(`⚠️ Failed to fetch ancestry/structure for Title ${title.number}`);
+                return { ...title, hierarchy: [], structure: [] };
             }
         });
 
-        const fullTitlesData = await Promise.all(structurePromises);
-        res.json({ titles: fullTitlesData });
+        // Fetch Agencies
+        console.log("🔍 Fetching agency data...");
+        const agenciesResponse = await axios.get(`${ADMIN_API}/agencies.json`);
+        const agencies = agenciesResponse.data.agencies;
+
+        const fullTitlesData = await Promise.all(hierarchyPromises);
+
+        res.json({ titles: fullTitlesData, agencies });
     } catch (error) {
-        console.error("🚨 Error fetching full structure:", error);
-        res.status(500).json({ error: "Failed to fetch title structure" });
+        console.error("🚨 Error fetching full hierarchy:", error);
+        res.status(500).json({ error: "Failed to fetch title hierarchy" });
     }
 });
 
@@ -61,7 +61,7 @@ app.get("/api/wordcount/:title/:part", async (req, res) => {
         }
 
         const textContent = response.data.replace(/<[^>]*>/g, ""); // Remove XML tags
-        const wordCount = countWords(textContent);
+        const wordCount = textContent.split(/\s+/).filter(word => word.length > 0).length;
 
         res.json({ title, part, wordCount });
     } catch (error) {
@@ -70,6 +70,7 @@ app.get("/api/wordcount/:title/:part", async (req, res) => {
     }
 });
 
+// ✅ Start Server
 app.listen(PORT, () => {
     console.log(`✅ Server running on port ${PORT}`);
 });
