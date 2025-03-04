@@ -15,33 +15,36 @@ function countWords(text) {
     return text.split(/\s+/).filter(word => word.length > 0).length;
 }
 
-// ✅ Fetch Titles, Chapters, Subchapters, and Parts
+// ✅ Fetch Titles with Full Hierarchy (Chapters, Subchapters, Parts)
 app.get("/api/titles", async (req, res) => {
     try {
-        const today = new Date().toISOString().split("T")[0]; // Get current date in YYYY-MM-DD format
+        const today = new Date().toISOString().split("T")[0]; // Get today's date in YYYY-MM-DD format
         const response = await axios.get(`${BASE_API}/titles.json`);
         const titles = response.data.titles;
 
-        // Fetch structure data for each title
-        const fullStructurePromises = titles.map(async (title) => {
+        // Fetch ancestry (full hierarchy) for each title
+        const ancestryPromises = titles.map(async (title) => {
             try {
-                const structureResponse = await axios.get(`${BASE_API}/structure/${today}/title-${title.number}.json`);
-                return { ...title, children: structureResponse.data.children };
+                const ancestryResponse = await axios.get(`${BASE_API}/ancestry/${today}/title-${title.number}.json`);
+                return {
+                    ...title,
+                    children: ancestryResponse.data || [] // Store full hierarchy
+                };
             } catch (error) {
-                console.warn(`⚠️ Failed to fetch structure for Title ${title.number}`);
-                return { ...title, children: [] }; // Keep going even if one title fails
+                console.warn(`⚠️ Failed to fetch ancestry for Title ${title.number}`);
+                return { ...title, children: [] };
             }
         });
 
-        const fullTitlesData = await Promise.all(fullStructurePromises);
+        const fullTitlesData = await Promise.all(ancestryPromises);
         res.json({ titles: fullTitlesData });
     } catch (error) {
-        console.error("🚨 Error fetching titles:", error);
-        res.status(500).json({ error: "Failed to fetch titles structure" });
+        console.error("🚨 Error fetching full ancestry hierarchy:", error);
+        res.status(500).json({ error: "Failed to fetch title ancestry" });
     }
 });
 
-// ✅ Fetch word count for a given Part
+// ✅ Fetch Word Count for a Given Part
 app.get("/api/wordcount/:title/:part", async (req, res) => {
     try {
         const { title, part } = req.params;
