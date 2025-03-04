@@ -9,7 +9,12 @@ app.use(express.json());
 
 console.log(`✅ Server is starting on port ${PORT}...`);
 
-// ✅ Simple test route
+// ✅ Add a homepage route
+app.get("/", (req, res) => {
+    res.send("✅ Backend is running successfully! 🎉");
+});
+
+// ✅ Simple test API route
 app.get("/api/test", (req, res) => {
     res.json({ message: "Backend is working!" });
 });
