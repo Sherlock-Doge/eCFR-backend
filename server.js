@@ -7,13 +7,12 @@ const PORT = process.env.PORT || 3000;
 app.use(cors()); // ✅ Fixes CORS issues
 app.use(express.json());
 
-console.log(`✅ Test server running on port ${PORT}...`);
+console.log(`✅ Server is starting on port ${PORT}...`);
 
-// ✅ Fake test route to check if backend is working
+// ✅ Simple test route
 app.get("/api/test", (req, res) => {
     res.json({ message: "Backend is working!" });
 });
 
-// ✅ Start Server
+// ✅ Start Server (IMPORTANT: "0.0.0.0" required for Render)
 app.listen(PORT, "0.0.0.0", () => console.log(`✅ Server running on port ${PORT}`));
-
