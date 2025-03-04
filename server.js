@@ -1,51 +1,49 @@
 const express = require("express");
-const fetch = require("node-fetch");
 const cors = require("cors");
+const axios = require("axios");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
-app.use(cors()); // ✅ Fixes CORS issues
-app.use(express.json());
+app.use(cors());
 
-console.log(`✅ Server is starting on port ${PORT}...`);
+const BASE_API = "https://www.ecfr.gov/api/versioner/v1";
 
-// ✅ Homepage route to confirm backend is running
-app.get("/", (req, res) => {
-    res.send("✅ Backend is running successfully! 🎉");
-});
-
-// ✅ Helper function to fetch eCFR data
-async function fetchAPI(url, res) {
-    try {
-        console.log(`Fetching: ${url}`);
-        const response = await fetch(url);
-
-        if (!response.ok) {
-            console.log(`Error fetching ${url}: ${response.status}`);
-            return res.status(response.status).json({ error: `Failed to fetch ${url}` });
-        }
-
-        const data = await response.json();
-        res.json(data);
-    } catch (error) {
-        console.error(`🚨 Fetch error: ${error.message}`);
-        res.status(500).json({ error: "Server error fetching data" });
-    }
+// Helper function to count words in a given text
+function countWords(text) {
+    if (!text) return 0;
+    return text.split(/\s+/).filter(word => word.length > 0).length;
 }
 
-// ✅ API routes to fetch real eCFR data
-app.get("/api/agencies", (req, res) => {
-    fetchAPI("https://www.ecfr.gov/api/admin/v1/agencies.json", res);
+// Fetch Titles, Chapters, Subchapters, and Parts
+app.get("/api/titles", async (req, res) => {
+    try {
+        const response = await axios.get(`${BASE_API}/titles.json`);
+        res.json(response.data);
+    } catch (error) {
+        res.status(500).json({ error: "Failed to fetch titles" });
+    }
 });
 
-app.get("/api/corrections", (req, res) => {
-    fetchAPI("https://www.ecfr.gov/api/admin/v1/corrections.json", res);
+// Fetch word count for a given Part
+app.get("/api/wordcount/:title/:part", async (req, res) => {
+    try {
+        const { title, part } = req.params;
+        const response = await axios.get(`${BASE_API}/full/latest/title-${title}.xml`);
+
+        if (!response.data) {
+            return res.json({ title, part, wordCount: 0 });
+        }
+
+        const textContent = response.data.replace(/<[^>]*>/g, ""); // Remove XML tags
+        const wordCount = countWords(textContent);
+
+        res.json({ title, part, wordCount });
+    } catch (error) {
+        res.status(500).json({ error: "Failed to fetch word count" });
+    }
 });
 
-app.get("/api/titles", (req, res) => {
-    fetchAPI("https://www.ecfr.gov/api/versioner/v1/titles.json", res);
+app.listen(PORT, () => {
+    console.log(`✅ Server running on port ${PORT}`);
 });
-
-// ✅ Start Server (IMPORTANT: "0.0.0.0" required for Render)
-app.listen(PORT, "0.0.0.0", () => console.log(`✅ Server running on port ${PORT}`));
