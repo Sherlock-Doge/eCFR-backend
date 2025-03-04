@@ -25,14 +25,20 @@ app.get("/api/titles", async (req, res) => {
         // Fetch ancestry (full hierarchy) for each title
         const ancestryPromises = titles.map(async (title) => {
             try {
+                console.log(`🔍 Fetching ancestry for Title ${title.number}...`);
                 const ancestryResponse = await axios.get(`${BASE_API}/ancestry/${today}/title-${title.number}.json`);
+
+                if (!ancestryResponse.data || ancestryResponse.data.length === 0) {
+                    console.warn(`⚠️ No hierarchy found for Title ${title.number}`);
+                }
+
                 return {
                     ...title,
-                    children: ancestryResponse.data || [] // Store full hierarchy
+                    hierarchy: ancestryResponse.data || [] // Store full hierarchy if available
                 };
             } catch (error) {
                 console.warn(`⚠️ Failed to fetch ancestry for Title ${title.number}`);
-                return { ...title, children: [] };
+                return { ...title, hierarchy: [] }; // Keep going even if one title fails
             }
         });
 
