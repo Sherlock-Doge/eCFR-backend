@@ -6,8 +6,8 @@ const PORT = process.env.PORT || 10000;
 
 const BASE_API = "https://www.ecfr.gov/api/versioner/v1";
 
-// 📌 Function to fetch hierarchy with rate-limiting & retry logic
-async function fetchHierarchy(titleNumber, retries = 5, delay = 3000) {
+// 📌 Function to fetch hierarchy with retry and delay
+async function fetchHierarchy(titleNumber, retries = 5, delay = 2000) {
     const today = new Date().toISOString().split("T")[0];
     const url = `${BASE_API}/structure/${today}/title-${titleNumber}.json`;
 
