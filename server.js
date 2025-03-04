@@ -22,31 +22,31 @@ app.get("/api/titles", async (req, res) => {
         const response = await axios.get(`${BASE_API}/titles.json`);
         const titles = response.data.titles;
 
-        // Fetch ancestry (full hierarchy) for each title
-        const ancestryPromises = titles.map(async (title) => {
+        // Fetch full structure for each title
+        const structurePromises = titles.map(async (title) => {
             try {
-                console.log(`🔍 Fetching ancestry for Title ${title.number}...`);
-                const ancestryResponse = await axios.get(`${BASE_API}/ancestry/${today}/title-${title.number}.json`);
+                console.log(`🔍 Fetching full structure for Title ${title.number}...`);
+                const structureResponse = await axios.get(`${BASE_API}/structure/${today}/title-${title.number}.json`);
 
-                if (!ancestryResponse.data || ancestryResponse.data.length === 0) {
+                if (!structureResponse.data || !structureResponse.data.children) {
                     console.warn(`⚠️ No hierarchy found for Title ${title.number}`);
                 }
 
                 return {
                     ...title,
-                    hierarchy: ancestryResponse.data || [] // Store full hierarchy if available
+                    hierarchy: structureResponse.data.children || [] // Store full hierarchy if available
                 };
             } catch (error) {
-                console.warn(`⚠️ Failed to fetch ancestry for Title ${title.number}`);
+                console.warn(`⚠️ Failed to fetch structure for Title ${title.number}`);
                 return { ...title, hierarchy: [] }; // Keep going even if one title fails
             }
         });
 
-        const fullTitlesData = await Promise.all(ancestryPromises);
+        const fullTitlesData = await Promise.all(structurePromises);
         res.json({ titles: fullTitlesData });
     } catch (error) {
-        console.error("🚨 Error fetching full ancestry hierarchy:", error);
-        res.status(500).json({ error: "Failed to fetch title ancestry" });
+        console.error("🚨 Error fetching full structure:", error);
+        res.status(500).json({ error: "Failed to fetch title structure" });
     }
 });
 
