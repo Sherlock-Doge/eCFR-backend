@@ -1,6 +1,6 @@
 {
   "name": "ecfr-backend",
-  "version": "1.0.1",  // 👈 Incremented version
+  "version": "1.0.1",  
   "description": "Backend service to fetch eCFR API data",
   "main": "server.js",
   "dependencies": {
