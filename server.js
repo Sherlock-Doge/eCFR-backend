@@ -6,7 +6,7 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 const BASE_URL = "https://www.ecfr.gov";
 
-// ✅ Initialize Cache (Refreshes every 24 hours)
+// ✅ Initialize Cache (Persists Data for 24 Hours)
 const wordCountCache = new NodeCache({ stdTTL: 86400, checkperiod: 3600 });
 
 // 📌 ✅ CORS Middleware - Allows frontend access
@@ -41,84 +41,81 @@ app.get("/api/agencies", async (req, res) => {
     }
 });
 
-// 📌 Fetch Word Counts (Optimized with Batch Processing & Retry Logic)
+// 📌 Fetch Word Counts (Use Cached Data If Available)
 app.get("/api/wordcounts", async (req, res) => {
-    try {
-        console.log("📥 Fetching and computing word counts...");
-
-        // Check Cache First
-        let cachedWordCounts = wordCountCache.get("wordCounts");
-        if (cachedWordCounts) {
-            console.log("✅ Returning cached word counts");
-            return res.json(cachedWordCounts);
-        }
-
-        // Fetch Title List
-        const titlesResponse = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
-        const titles = titlesResponse.data.titles;
-
-        let wordCounts = {};
-
-        // Process Titles in Batches to Reduce API Load
-        const batchSize = 5;
-        for (let i = 0; i < titles.length; i += batchSize) {
-            const batch = titles.slice(i, i + batchSize);
-            await Promise.all(batch.map(async (title) => {
-                try {
-                    console.log(`🔍 Processing Title ${title.number}...`);
-                    
-                    const sectionsUrl = `${BASE_URL}/api/versioner/v1/structure/${title.latest_issue_date}/title-${title.number}.json`;
-                    const sectionsResponse = await axios.get(sectionsUrl);
-                    const sections = extractSections(sectionsResponse.data);
-
-                    let totalWordCount = 0;
-
-                    // Fetch Sections Sequentially to Avoid 429 Rate Limits
-                    for (const section of sections) {
-                        try {
-                            await delay(500);  // Slow Down Requests
-                            const sectionContentUrl = `${BASE_URL}/api/versioner/v1/full/section/${section}`;
-                            const sectionResponse = await fetchWithRetries(sectionContentUrl);
-
-                            if (sectionResponse && sectionResponse.content) {
-                                const text = extractTextFromContent(sectionResponse.content);
-                                totalWordCount += countWords(text);
-                            }
-                        } catch (error) {
-                            console.error(`⚠️ Skipping section ${section}:`, error.message);
-                        }
-                    }
-
-                    wordCounts[title.number] = totalWordCount;
-                    console.log(`📊 Word Count for Title ${title.number}: ${totalWordCount}`);
-
-                } catch (error) {
-                    console.error(`⚠️ Error processing Title ${title.number}:`, error.message);
-                }
-            }));
-        }
-
-        // Cache Results
-        wordCountCache.set("wordCounts", wordCounts);
-        console.log("✅ Word counts cached");
-
-        res.json(wordCounts);
-    } catch (error) {
-        console.error("🚨 Error fetching word counts:", error.message);
-        res.status(500).json({ error: "Failed to fetch word count data" });
+    let cachedWordCounts = wordCountCache.get("wordCounts");
+    if (cachedWordCounts) {
+        console.log("✅ Returning cached word counts");
+        return res.json(cachedWordCounts);
+    } else {
+        return res.json({ message: "Word counts are updating... Check back later." });
     }
 });
 
+// 📌 Background Process to Fetch Word Counts
+async function fetchAndCacheWordCounts() {
+    try {
+        console.log("📥 Starting background word count update...");
+
+        const titlesResponse = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
+        const titles = titlesResponse.data.titles;
+        let wordCounts = {};
+
+        for (let title of titles) {
+            console.log(`🔍 Processing Title ${title.number}...`);
+
+            try {
+                const sectionsUrl = `${BASE_URL}/api/versioner/v1/structure/${title.latest_issue_date}/title-${title.number}.json`;
+                const sectionsResponse = await axios.get(sectionsUrl);
+                const sections = extractSections(sectionsResponse.data);
+
+                let totalWordCount = 0;
+
+                // Process Sections One by One to Reduce API Load
+                for (const section of sections) {
+                    try {
+                        await delay(5000); // Wait 5 seconds per section to avoid 429 errors
+                        const sectionContentUrl = `${BASE_URL}/api/versioner/v1/full/section/${section}`;
+                        const sectionResponse = await fetchWithRetries(sectionContentUrl);
+
+                        if (sectionResponse && sectionResponse.content) {
+                            const text = extractTextFromContent(sectionResponse.content);
+                            totalWordCount += countWords(text);
+                        }
+                    } catch (error) {
+                        console.warn(`⚠️ Skipping section ${section}: ${error.message}`);
+                    }
+                }
+
+                wordCounts[title.number] = totalWordCount;
+                console.log(`📊 Word Count for Title ${title.number}: ${totalWordCount}`);
+
+                // Save Partial Data After Each Title is Processed
+                wordCountCache.set("wordCounts", wordCounts);
+            } catch (error) {
+                console.error(`⚠️ Error processing Title ${title.number}: ${error.message}`);
+            }
+        }
+
+        console.log("✅ Word count update complete.");
+    } catch (error) {
+        console.error("🚨 Error updating word counts:", error.message);
+    }
+}
+
+// 📌 Run Background Process (Starts After Server Launch)
+setTimeout(fetchAndCacheWordCounts, 5000); // Start 5 seconds after launch
+
 // 📌 Fetch with Automatic Retry (Handles 429 Errors)
-async function fetchWithRetries(url, retries = 5) {
+async function fetchWithRetries(url, retries = 3) {
     for (let i = 0; i < retries; i++) {
         try {
             const response = await axios.get(url);
             return response.data;
         } catch (error) {
             if (error.response && error.response.status === 429) {
-                console.warn(`⚠️ Rate limited. Retrying in ${1000 * (i + 1)}ms...`);
-                await delay(1000 * (i + 1)); // Exponential backoff
+                console.warn(`⚠️ Rate limited. Retrying in ${5000 * (i + 1)}ms...`);
+                await delay(5000 * (i + 1)); // Exponential backoff
             } else {
                 throw error;
             }
