@@ -1,9 +1,17 @@
 const express = require("express");
 const axios = require("axios");
+const cors = require("cors"); // ✅ Import CORS middleware
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 const BASE_API = "https://www.ecfr.gov/api/versioner/v1";
+
+// 📌 Enable CORS to allow requests from your frontend
+app.use(cors({
+    origin: "*", // Allow all origins (You can specify your frontend URL if needed)
+    methods: "GET",
+    allowedHeaders: "Content-Type"
+}));
 
 // 📌 Middleware to allow JSON responses
 app.use(express.json());
@@ -24,7 +32,7 @@ app.get("/api/titles", async (req, res) => {
     }
 });
 
-// 📌 Fetch word counts
+// 📌 Fetch word counts (Fixes CORS & Format Issues)
 app.get("/api/wordcounts", async (req, res) => {
     try {
         console.log("📥 Fetching word counts...");
@@ -32,7 +40,7 @@ app.get("/api/wordcounts", async (req, res) => {
         res.json(response.data);
     } catch (error) {
         console.error("🚨 Error fetching word counts:", error.message);
-        res.status(500).json({ error: "Failed to fetch word counts" });
+        res.status(500).json({ error: "Failed to fetch word count data" });
     }
 });
 
@@ -49,6 +57,18 @@ app.get("/api/ancestry/:title", async (req, res) => {
     } catch (error) {
         console.error(`🚨 Error fetching ancestry for Title ${titleNumber}:`, error.message);
         res.status(500).json({ error: "Failed to fetch ancestry data" });
+    }
+});
+
+// 📌 Fetch agencies (Fixes CORS)
+app.get("/api/agencies", async (req, res) => {
+    try {
+        console.log("📥 Fetching agency data...");
+        const response = await axios.get('https://www.ecfr.gov/api/admin/v1/agencies.json');
+        res.json(response.data);
+    } catch (error) {
+        console.error("🚨 Error fetching agencies:", error.message);
+        res.status(500).json({ error: "Failed to fetch agency data" });
     }
 });
 
