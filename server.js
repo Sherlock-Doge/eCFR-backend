@@ -6,7 +6,7 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 const BASE_URL = "https://www.ecfr.gov";
 
-// ✅ Initialize Cache (Persists Data for 24 Hours)
+// ✅ Initialize Cache (24-hour persistence)
 const wordCountCache = new NodeCache({ stdTTL: 86400, checkperiod: 3600 });
 
 // 📌 ✅ CORS Middleware - Allows frontend access
@@ -41,31 +41,36 @@ app.get("/api/agencies", async (req, res) => {
     }
 });
 
-// 📌 Fetch Word Counts (Cached)
+// 📌 Fetch Precomputed Word Counts
 app.get("/api/wordcounts", async (req, res) => {
-    let cachedWordCounts = wordCountCache.get("wordCounts");
-    if (cachedWordCounts) {
-        console.log("✅ Returning cached word counts");
-        return res.json(cachedWordCounts);
-    }
-
     try {
-        console.log("📥 Fetching word counts from eCFR API...");
-        const response = await axios.get(`${BASE_URL}/api/search/v1/counts/hierarchy`);
-        
-        // ✅ Process response and map word counts to Titles
-        let wordCounts = {};
-        if (response.data.children) {
-            response.data.children.forEach(title => {
-                if (title.level === "title" && title.hierarchy && title.count) {
-                    wordCounts[title.hierarchy] = title.count;
-                }
-            });
+        console.log("📥 Fetching precomputed word counts...");
+
+        // ✅ Check if cached data exists
+        let cachedWordCounts = wordCountCache.get("wordCounts");
+        if (cachedWordCounts) {
+            console.log("✅ Returning cached word counts");
+            return res.json(cachedWordCounts);
         }
 
-        // ✅ Cache word counts
-        wordCountCache.set("wordCounts", wordCounts);
-        console.log("✅ Word counts updated and cached.");
+        // 🔍 Fetch from eCFR API
+        const response = await axios.get(`${BASE_URL}/api/search/v1/counts/hierarchy`);
+        const rawData = response.data.children;
+
+        if (!rawData || !Array.isArray(rawData)) {
+            throw new Error("Invalid word count data format");
+        }
+
+        // 📊 Extract title-level word counts
+        let wordCounts = {};
+        rawData.forEach(title => {
+            if (title.level === "title" && title.hierarchy && title.count) {
+                wordCounts[title.hierarchy] = title.count;
+            }
+        });
+
+        console.log("✅ Word counts fetched and cached");
+        wordCountCache.set("wordCounts", wordCounts); // Cache results
 
         res.json(wordCounts);
     } catch (error) {
