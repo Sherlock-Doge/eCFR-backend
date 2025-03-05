@@ -1,13 +1,17 @@
 const express = require("express");
 const axios = require("axios");
 const NodeCache = require("node-cache");
+const { JSDOM } = require("jsdom");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 const BASE_URL = "https://www.ecfr.gov";
 
-// ✅ Initialize Cache (24-hour persistence)
+// ✅ Initialize Cache (24-hour persistence for quick access)
 const wordCountCache = new NodeCache({ stdTTL: 86400, checkperiod: 3600 });
+
+// ✅ Auto-Update Word Counts Every Week
+const UPDATE_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 7 Days
 
 // 📌 ✅ CORS Middleware - Allows frontend access
 app.use((req, res, next) => {
@@ -41,50 +45,74 @@ app.get("/api/agencies", async (req, res) => {
     }
 });
 
-// 📌 Fetch Precomputed Word Counts (Logging FULL API Response)
+// 📌 Fetch Word Counts (Cache for Fast Access)
 app.get("/api/wordcounts", async (req, res) => {
-    try {
-        console.log("📥 Fetching precomputed word counts...");
-
-        // 🔄 Force cache reset before fetching fresh data
-        wordCountCache.del("wordCounts");
-
-        // 🔍 Check if cache already has data
-        let cachedWordCounts = wordCountCache.get("wordCounts");
-        if (cachedWordCounts) {
-            console.log("✅ Returning cached word counts");
-            return res.json(cachedWordCounts);
-        }
-
-        // 🔍 Fetch from eCFR API
-        const response = await axios.get(`${BASE_URL}/api/search/v1/counts/hierarchy`);
-        console.log("📊 RAW API RESPONSE:", JSON.stringify(response.data, null, 2));
-
-        const rawData = response.data.children;
-
-        if (!rawData || !Array.isArray(rawData)) {
-            throw new Error("Invalid word count data format");
-        }
-
-        // 📊 Extract title-level word counts
-        let wordCounts = {};
-        rawData.forEach(title => {
-            if (title.level === "title" && title.hierarchy && title.count) {
-                wordCounts[title.hierarchy] = title.count;
-            }
-        });
-
-        console.log("✅ Word counts fetched and cached:", wordCounts);
-
-        // ✅ Save full word count results
-        wordCountCache.set("wordCounts", wordCounts);
-
-        res.json(wordCounts);
-    } catch (error) {
-        console.error("🚨 Error fetching word counts:", error.message);
-        res.status(500).json({ error: "Failed to fetch word count data" });
+    let cachedWordCounts = wordCountCache.get("wordCounts");
+    if (cachedWordCounts) {
+        console.log("✅ Returning cached word counts");
+        return res.json(cachedWordCounts);
     }
+
+    console.log("📥 Word counts not found in cache. Fetching new data...");
+    let wordCounts = await fetchAndCacheWordCounts();
+    res.json(wordCounts);
 });
+
+// 📌 Fetch and Cache Word Counts (Runs Weekly)
+async function fetchAndCacheWordCounts() {
+    try {
+        console.log("🔄 Updating word counts...");
+        const titlesResponse = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
+        const titles = titlesResponse.data.titles;
+        let wordCounts = {};
+
+        for (let title of titles) {
+            const titleNumber = title.number;
+            const issueDate = title.latest_issue_date;
+            console.log(`📥 Processing Title ${titleNumber} (Issued: ${issueDate})...`);
+
+            try {
+                const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${issueDate}/title-${titleNumber}.xml`;
+                const xmlResponse = await axios.get(xmlUrl);
+                const wordCount = countWordsFromXML(xmlResponse.data);
+                wordCounts[titleNumber] = wordCount;
+
+                console.log(`📊 Word Count for Title ${titleNumber}: ${wordCount}`);
+            } catch (error) {
+                console.warn(`⚠️ Error processing Title ${titleNumber}: ${error.message}`);
+            }
+        }
+
+        // ✅ Save in Cache
+        wordCountCache.set("wordCounts", wordCounts);
+        console.log("✅ Word count update complete.");
+        return wordCounts;
+    } catch (error) {
+        console.error("🚨 Error updating word counts:", error.message);
+        return {};
+    }
+}
+
+// 📌 Extract Word Count from XML Content
+function countWordsFromXML(xmlData) {
+    try {
+        // 🏗️ Convert XML to Text
+        const dom = new JSDOM(xmlData);
+        const textContent = dom.window.document.body.textContent || "";
+
+        // 🔍 Remove Special Characters, Keep Only Words
+        const cleanText = textContent.replace(/[^a-zA-Z0-9\s]/g, ""); // Remove punctuation & special characters
+        const words = cleanText.split(/\s+/).filter(word => word.length > 0);
+
+        return words.length;
+    } catch (error) {
+        console.error("⚠️ Error parsing XML:", error.message);
+        return 0;
+    }
+}
+
+// 📌 Auto-Update Word Counts Every Week
+setInterval(fetchAndCacheWordCounts, UPDATE_INTERVAL_MS);
 
 // 📌 Start the Server
 app.listen(PORT, () => {
