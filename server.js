@@ -5,12 +5,9 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 const BASE_API = "https://www.ecfr.gov/api/versioner/v1";
 
-// 📌 Middleware to allow JSON responses
-app.use(express.json());
-
-// 📌 ✅ Global CORS Fix - This must be applied to **ALL ROUTES**
+// 📌 ✅ CORS Middleware - Allows frontend access from GitHub Pages
 app.use((req, res, next) => {
-    res.header("Access-Control-Allow-Origin", "*"); // ✅ Allows all origins (including GitHub Pages)
+    res.header("Access-Control-Allow-Origin", "*"); // ✅ Allows requests from anywhere
     res.header("Access-Control-Allow-Methods", "GET, OPTIONS");
     res.header("Access-Control-Allow-Headers", "Content-Type");
     next();
@@ -54,7 +51,7 @@ app.get("/api/wordcounts", async (req, res) => {
     }
 });
 
-// 📌 Fix Ancestry Fetching (Error 500)
+// 📌 Fix Ancestry Fetching (Error 500 Debugging)
 app.get("/api/ancestry/:title", async (req, res) => {
     const titleNumber = req.params.title;
     const today = new Date().toISOString().split("T")[0];
@@ -72,6 +69,14 @@ app.get("/api/ancestry/:title", async (req, res) => {
         res.json(response.data);
     } catch (error) {
         console.error(`🚨 Error fetching ancestry for Title ${titleNumber}:`, error.message);
+        
+        // ✅ Debugging - Log full error response
+        if (error.response) {
+            console.error("🛑 Error Response Data:", error.response.data);
+            console.error("🛑 Status Code:", error.response.status);
+            console.error("🛑 Headers:", error.response.headers);
+        }
+
         res.status(500).json({ error: `Failed to fetch ancestry for Title ${titleNumber}` });
     }
 });
