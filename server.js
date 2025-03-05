@@ -37,7 +37,7 @@ app.get("/api/agencies", async (req, res) => {
     }
 });
 
-// 📌 Fetch latest issue date first, then fetch **FULL** ancestry data
+// 📌 Fetch latest issue date first, then fetch FULL STRUCTURE hierarchy
 app.get('/api/ancestry/:title', async (req, res) => {
     const titleNumber = req.params.title;
     const titlesApiUrl = `${BASE_URL}/api/versioner/v1/titles.json`;
@@ -55,17 +55,17 @@ app.get('/api/ancestry/:title', async (req, res) => {
         }
         const latestDate = latestTitle.latest_issue_date;
 
-        // 🔍 Step 2: Fetch FULL ancestry (Title → Chapter → Subchapter → Part)
-        const ancestryUrl = `${BASE_URL}/api/versioner/v1/ancestry/${latestDate}/title-${titleNumber}.json?chapter=true&subchapter=true&part=true`;
-        console.log(`📥 Fetching full ancestry for Title ${titleNumber} from ${ancestryUrl}...`);
+        // 🔍 Step 2: Fetch FULL STRUCTURE (Title → Chapter → Subchapter → Part → Section)
+        const structureUrl = `${BASE_URL}/api/versioner/v1/structure/${latestDate}/title-${titleNumber}.json`;
+        console.log(`📥 Fetching full structure for Title ${titleNumber} from ${structureUrl}...`);
 
-        const ancestryResponse = await axios.get(ancestryUrl);
+        const structureResponse = await axios.get(structureUrl);
 
         // ✅ Return full hierarchical structure
-        res.json(ancestryResponse.data);
+        res.json(structureResponse.data);
     } catch (error) {
-        console.error(`🚨 Error fetching ancestry for Title ${titleNumber}:`, error.message);
-        res.status(500).json({ error: "Failed to fetch ancestry data" });
+        console.error(`🚨 Error fetching structure for Title ${titleNumber}:`, error.message);
+        res.status(500).json({ error: "Failed to fetch structure data" });
     }
 });
 
