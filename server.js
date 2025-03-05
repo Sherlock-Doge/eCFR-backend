@@ -6,10 +6,10 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 const BASE_URL = "https://www.ecfr.gov";
 
-// 📌 ✅ Initialize Cache (Refreshes every 24 hours to reduce API calls)
+// ✅ Initialize Cache (Refreshes every 24 hours)
 const wordCountCache = new NodeCache({ stdTTL: 86400, checkperiod: 3600 });
 
-// 📌 ✅ CORS Middleware - Allows frontend access from GitHub Pages
+// 📌 ✅ CORS Middleware - Allows frontend access
 app.use((req, res, next) => {
     res.header("Access-Control-Allow-Origin", "*");
     res.header("Access-Control-Allow-Methods", "GET, OPTIONS");
@@ -17,118 +17,90 @@ app.use((req, res, next) => {
     next();
 });
 
-// 📌 Fetch eCFR Titles (Summary Info)
+// 📌 Fetch Titles (Summary Info)
 app.get("/api/titles", async (req, res) => {
     try {
         console.log("📥 Fetching eCFR Titles...");
         const response = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
-        res.json(response.data.titles);
+        res.json(response.data);
     } catch (error) {
         console.error("🚨 Error fetching titles:", error.message);
         res.status(500).json({ error: "Failed to fetch title data" });
     }
 });
 
-// 📌 Fetch Agencies List
+// 📌 Fetch Agencies
 app.get("/api/agencies", async (req, res) => {
     try {
         console.log("📥 Fetching agency data...");
         const response = await axios.get(`${BASE_URL}/api/admin/v1/agencies.json`);
-        res.json(response.data.agencies);
+        res.json(response.data);
     } catch (error) {
         console.error("🚨 Error fetching agencies:", error.message);
         res.status(500).json({ error: "Failed to fetch agency data" });
     }
 });
 
-// 📌 Fetch Ancestry Data for a Specific Title
-app.get('/api/ancestry/:title', async (req, res) => {
-    const titleNumber = req.params.title;
-    const titlesApiUrl = `${BASE_URL}/api/versioner/v1/titles.json`;
-
-    try {
-        console.log(`📥 Fetching latest issue date for Title ${titleNumber}...`);
-        const titlesResponse = await axios.get(titlesApiUrl);
-        const titlesData = titlesResponse.data.titles;
-
-        // ✅ Find the latest issue date for the requested title
-        const latestTitle = titlesData.find(t => t.number == titleNumber);
-        if (!latestTitle || !latestTitle.latest_issue_date) {
-            throw new Error("Could not find latest issue date");
-        }
-        const latestDate = latestTitle.latest_issue_date;
-
-        // 🔍 Fetch Full Hierarchical Structure (Title → Chapter → Subchapter → Part → Section)
-        const structureUrl = `${BASE_URL}/api/versioner/v1/structure/${latestDate}/title-${titleNumber}.json`;
-        console.log(`📥 Fetching full structure for Title ${titleNumber} from ${structureUrl}...`);
-
-        const structureResponse = await axios.get(structureUrl);
-        res.json(structureResponse.data);
-    } catch (error) {
-        console.error(`🚨 Error fetching structure for Title ${titleNumber}:`, error.message);
-        res.status(500).json({ error: "Failed to fetch structure data" });
-    }
-});
-
-// 📌 Fetch and Compute Word Counts for Each Title
+// 📌 Fetch Word Counts (Optimized with Batch Processing & Retry Logic)
 app.get("/api/wordcounts", async (req, res) => {
     try {
         console.log("📥 Fetching and computing word counts...");
 
-        // ✅ Check cache first to avoid redundant API calls
+        // Check Cache First
         let cachedWordCounts = wordCountCache.get("wordCounts");
         if (cachedWordCounts) {
             console.log("✅ Returning cached word counts");
             return res.json(cachedWordCounts);
         }
 
-        // 📌 Fetch the list of Titles
+        // Fetch Title List
         const titlesResponse = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
         const titles = titlesResponse.data.titles;
 
         let wordCounts = {};
 
-        // 📌 Fetch and calculate word count for each title **in parallel**
-        await Promise.all(titles.map(async (title) => {
-            try {
-                console.log(`🔍 Processing Title ${title.number}...`);
+        // Process Titles in Batches to Reduce API Load
+        const batchSize = 5;
+        for (let i = 0; i < titles.length; i += batchSize) {
+            const batch = titles.slice(i, i + batchSize);
+            await Promise.all(batch.map(async (title) => {
+                try {
+                    console.log(`🔍 Processing Title ${title.number}...`);
+                    
+                    const sectionsUrl = `${BASE_URL}/api/versioner/v1/structure/${title.latest_issue_date}/title-${title.number}.json`;
+                    const sectionsResponse = await axios.get(sectionsUrl);
+                    const sections = extractSections(sectionsResponse.data);
 
-                // 📌 Fetch structure to get all sections within the Title
-                const structureUrl = `${BASE_URL}/api/versioner/v1/structure/${title.latest_issue_date}/title-${title.number}.json`;
-                const structureResponse = await axios.get(structureUrl);
-                const sections = extractSections(structureResponse.data);
+                    let totalWordCount = 0;
 
-                let totalWordCount = 0;
+                    // Fetch Sections Sequentially to Avoid 429 Rate Limits
+                    for (const section of sections) {
+                        try {
+                            await delay(500);  // Slow Down Requests
+                            const sectionContentUrl = `${BASE_URL}/api/versioner/v1/full/section/${section}`;
+                            const sectionResponse = await fetchWithRetries(sectionContentUrl);
 
-                // 📌 Fetch content for each section **in parallel**
-                const sectionPromises = sections.map(async (section) => {
-                    try {
-                        const sectionContentUrl = `${BASE_URL}/api/versioner/v1/full/section/${section}`;
-                        const sectionResponse = await axios.get(sectionContentUrl);
-
-                        if (sectionResponse.data && sectionResponse.data.content) {
-                            const text = extractTextFromContent(sectionResponse.data.content);
-                            totalWordCount += countWords(text);
+                            if (sectionResponse && sectionResponse.content) {
+                                const text = extractTextFromContent(sectionResponse.content);
+                                totalWordCount += countWords(text);
+                            }
+                        } catch (error) {
+                            console.error(`⚠️ Skipping section ${section}:`, error.message);
                         }
-                    } catch (error) {
-                        console.error(`⚠️ Error fetching section ${section}:`, error.message);
                     }
-                });
 
-                await Promise.all(sectionPromises);
+                    wordCounts[title.number] = totalWordCount;
+                    console.log(`📊 Word Count for Title ${title.number}: ${totalWordCount}`);
 
-                // 📌 Store final word count for the Title
-                wordCounts[title.number] = totalWordCount;
-                console.log(`📊 Word Count for Title ${title.number}: ${totalWordCount}`);
+                } catch (error) {
+                    console.error(`⚠️ Error processing Title ${title.number}:`, error.message);
+                }
+            }));
+        }
 
-            } catch (error) {
-                console.error(`⚠️ Error processing Title ${title.number}:`, error.message);
-            }
-        }));
-
-        // ✅ Cache the word counts to improve performance
+        // Cache Results
         wordCountCache.set("wordCounts", wordCounts);
-        console.log("✅ Word counts cached successfully");
+        console.log("✅ Word counts cached");
 
         res.json(wordCounts);
     } catch (error) {
@@ -137,7 +109,25 @@ app.get("/api/wordcounts", async (req, res) => {
     }
 });
 
-// 📌 Extract Section Identifiers from Hierarchical Structure
+// 📌 Fetch with Automatic Retry (Handles 429 Errors)
+async function fetchWithRetries(url, retries = 5) {
+    for (let i = 0; i < retries; i++) {
+        try {
+            const response = await axios.get(url);
+            return response.data;
+        } catch (error) {
+            if (error.response && error.response.status === 429) {
+                console.warn(`⚠️ Rate limited. Retrying in ${1000 * (i + 1)}ms...`);
+                await delay(1000 * (i + 1)); // Exponential backoff
+            } else {
+                throw error;
+            }
+        }
+    }
+    throw new Error(`Failed to fetch after ${retries} attempts`);
+}
+
+// 📌 Extract Section Identifiers from Hierarchy Data
 function extractSections(structureData) {
     let sections = [];
 
@@ -176,6 +166,11 @@ function extractTextFromContent(content) {
 // 📌 Count Words in a Given String
 function countWords(text) {
     return text.split(/\s+/).filter(word => word.length > 0).length;
+}
+
+// 📌 Delay Function (Prevents API Spam)
+function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 // 📌 Start the Server
