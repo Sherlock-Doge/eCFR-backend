@@ -3,21 +3,21 @@ const axios = require("axios");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
-const BASE_API = "https://www.ecfr.gov/api/versioner/v1";
+const BASE_URL = "https://www.ecfr.gov";
 
 // 📌 ✅ CORS Middleware - Allows frontend access from GitHub Pages
 app.use((req, res, next) => {
-    res.header("Access-Control-Allow-Origin", "*"); // ✅ Allows requests from anywhere
+    res.header("Access-Control-Allow-Origin", "*");
     res.header("Access-Control-Allow-Methods", "GET, OPTIONS");
     res.header("Access-Control-Allow-Headers", "Content-Type");
     next();
 });
 
-// 📌 Fetch eCFR Titles
+// 📌 Fetch Titles (Summary Info)
 app.get("/api/titles", async (req, res) => {
     try {
         console.log("📥 Fetching eCFR Titles...");
-        const response = await axios.get(`${BASE_API}/titles.json`);
+        const response = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
         res.json(response.data);
     } catch (error) {
         console.error("🚨 Error fetching titles:", error.message);
@@ -25,71 +25,49 @@ app.get("/api/titles", async (req, res) => {
     }
 });
 
-// 📌 Fix Word Count Format Issue
-app.get("/api/wordcounts", async (req, res) => {
-    try {
-        console.log("📥 Fetching word counts...");
-        const response = await axios.get("https://www.ecfr.gov/api/search/v1/counts/hierarchy");
-
-        // ✅ Fix Unexpected Response Format
-        if (!response.data || !response.data.children) {
-            console.error("🚨 Unexpected word count format:", response.data);
-            return res.status(500).json({ error: "Invalid word count data" });
-        }
-
-        let wordCountMap = {};
-        response.data.children.forEach(item => {
-            if (item.identifier) {
-                wordCountMap[item.identifier] = item.count || 0;
-            }
-        });
-
-        res.json(wordCountMap);
-    } catch (error) {
-        console.error("🚨 Error fetching word counts:", error.message);
-        res.status(500).json({ error: "Failed to fetch word count data" });
-    }
-});
-
-// 📌 Fix Ancestry Fetching (Error 500 Debugging)
-app.get("/api/ancestry/:title", async (req, res) => {
-    const titleNumber = req.params.title;
-    const today = new Date().toISOString().split("T")[0];
-    const url = `${BASE_API}/ancestry/${today}/title-${titleNumber}.json`;
-
-    try {
-        console.log(`🔍 Fetching ancestry for Title ${titleNumber}...`);
-        const response = await axios.get(url);
-
-        if (!response.data || typeof response.data !== "object") {
-            console.error(`🚨 Invalid ancestry response for Title ${titleNumber}:`, response.data);
-            return res.status(500).json({ error: "Invalid ancestry data" });
-        }
-
-        res.json(response.data);
-    } catch (error) {
-        console.error(`🚨 Error fetching ancestry for Title ${titleNumber}:`, error.message);
-        
-        // ✅ Debugging - Log full error response
-        if (error.response) {
-            console.error("🛑 Error Response Data:", error.response.data);
-            console.error("🛑 Status Code:", error.response.status);
-            console.error("🛑 Headers:", error.response.headers);
-        }
-
-        res.status(500).json({ error: `Failed to fetch ancestry for Title ${titleNumber}` });
-    }
-});
-
-// 📌 Fix Agencies CORS & 404 Issue
+// 📌 Fetch Agencies
 app.get("/api/agencies", async (req, res) => {
     try {
         console.log("📥 Fetching agency data...");
-        const response = await axios.get("https://www.ecfr.gov/api/admin/v1/agencies.json");
+        const response = await axios.get(`${BASE_URL}/api/admin/v1/agencies.json`);
         res.json(response.data);
     } catch (error) {
         console.error("🚨 Error fetching agencies:", error.message);
         res.status(500).json({ error: "Failed to fetch agency data" });
+    }
+});
+
+// 📌 Fetch Title Ancestry (Chapters, Parts, Sections)
+app.get("/api/ancestry/:title", async (req, res) => {
+    const titleNumber = req.params.title;
+    const today = new Date().toISOString().split("T")[0]; // Get today's date
+    const url = `${BASE_URL}/api/versioner/v1/ancestry/${today}/title-${titleNumber}.json`;
+
+    try {
+        console.log(`🔍 Fetching ancestry for Title ${titleNumber}...`);
+        const response = await axios.get(url);
+        res.json(response.data);
+    } catch (error) {
+        console.error(`🚨 Error fetching ancestry for Title ${titleNumber}:`, error.message);
+        res.status(500).json({ error: "Failed to fetch ancestry data" });
+    }
+});
+
+// 📌 Fetch Word Count Data
+app.get("/api/wordcounts", async (req, res) => {
+    try {
+        console.log("📥 Fetching word counts...");
+        const response = await axios.get(`${BASE_URL}/api/search/v1/counts/hierarchy`);
+
+        if (!response.data || typeof response.data !== "object") {
+            console.error("🚨 Unexpected word count format:", response.data);
+            return res.status(500).json({ error: "Invalid word count data" });
+        }
+
+        res.json(response.data);
+    } catch (error) {
+        console.error("🚨 Error fetching word counts:", error.message);
+        res.status(500).json({ error: "Failed to fetch word count data" });
     }
 });
 
