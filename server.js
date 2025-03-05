@@ -41,15 +41,15 @@ app.get("/api/agencies", async (req, res) => {
     }
 });
 
-// 📌 Fetch Precomputed Word Counts
+// 📌 Fetch Precomputed Word Counts (Logging FULL API Response)
 app.get("/api/wordcounts", async (req, res) => {
     try {
         console.log("📥 Fetching precomputed word counts...");
 
-        // ✅ Force cache reset for fresh data
+        // 🔄 Force cache reset before fetching fresh data
         wordCountCache.del("wordCounts");
 
-        // ✅ Check if cached data exists
+        // 🔍 Check if cache already has data
         let cachedWordCounts = wordCountCache.get("wordCounts");
         if (cachedWordCounts) {
             console.log("✅ Returning cached word counts");
@@ -58,6 +58,8 @@ app.get("/api/wordcounts", async (req, res) => {
 
         // 🔍 Fetch from eCFR API
         const response = await axios.get(`${BASE_URL}/api/search/v1/counts/hierarchy`);
+        console.log("📊 RAW API RESPONSE:", JSON.stringify(response.data, null, 2));
+
         const rawData = response.data.children;
 
         if (!rawData || !Array.isArray(rawData)) {
