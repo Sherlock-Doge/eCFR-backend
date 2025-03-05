@@ -46,6 +46,9 @@ app.get("/api/wordcounts", async (req, res) => {
     try {
         console.log("📥 Fetching precomputed word counts...");
 
+        // ✅ Force cache reset for fresh data
+        wordCountCache.del("wordCounts");
+
         // ✅ Check if cached data exists
         let cachedWordCounts = wordCountCache.get("wordCounts");
         if (cachedWordCounts) {
@@ -69,8 +72,10 @@ app.get("/api/wordcounts", async (req, res) => {
             }
         });
 
-        console.log("✅ Word counts fetched and cached");
-        wordCountCache.set("wordCounts", wordCounts); // Cache results
+        console.log("✅ Word counts fetched and cached:", wordCounts);
+
+        // ✅ Save full word count results
+        wordCountCache.set("wordCounts", wordCounts);
 
         res.json(wordCounts);
     } catch (error) {
