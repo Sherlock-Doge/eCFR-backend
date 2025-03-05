@@ -37,21 +37,37 @@ app.get("/api/agencies", async (req, res) => {
     }
 });
 
-// 📌 Fetch Title Ancestry (Chapters, Parts, Sections)
-app.get("/api/ancestry/:title", async (req, res) => {
+// 📌 Fetch latest issue date first, then fetch ancestry data
+app.get('/api/ancestry/:title', async (req, res) => {
     const titleNumber = req.params.title;
-    const today = new Date().toISOString().split("T")[0]; // Get today's date
-    const url = `${BASE_URL}/api/versioner/v1/ancestry/${today}/title-${titleNumber}.json`;
+    const titlesApiUrl = `https://www.ecfr.gov/api/versioner/v1/titles.json`;
 
     try {
-        console.log(`🔍 Fetching ancestry for Title ${titleNumber}...`);
-        const response = await axios.get(url);
-        res.json(response.data);
+        // 🔍 Step 1: Fetch the latest issue date
+        console.log("📥 Fetching latest issue date...");
+        const titlesResponse = await axios.get(titlesApiUrl);
+        const titlesData = titlesResponse.data.titles;
+
+        // ✅ Find the latest issue date
+        const latestTitle = titlesData.find(t => t.number == titleNumber);
+        if (!latestTitle || !latestTitle.latest_issue_date) {
+            throw new Error("Could not find latest issue date");
+        }
+        const latestDate = latestTitle.latest_issue_date;
+
+        // 🔍 Step 2: Fetch ancestry using the correct date
+        const ancestryUrl = `https://www.ecfr.gov/api/versioner/v1/ancestry/${latestDate}/title-${titleNumber}.json`;
+        console.log(`📥 Fetching ancestry for Title ${titleNumber} from ${ancestryUrl}...`);
+
+        const ancestryResponse = await axios.get(ancestryUrl);
+        res.json(ancestryResponse.data);
+
     } catch (error) {
         console.error(`🚨 Error fetching ancestry for Title ${titleNumber}:`, error.message);
         res.status(500).json({ error: "Failed to fetch ancestry data" });
     }
 });
+
 
 // 📌 Fetch Word Count Data
 app.get("/api/wordcounts", async (req, res) => {
