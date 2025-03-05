@@ -37,14 +37,14 @@ app.get("/api/agencies", async (req, res) => {
     }
 });
 
-// 📌 Fetch latest issue date first, then fetch ancestry data
+// 📌 Fetch latest issue date first, then fetch **FULL** ancestry data
 app.get('/api/ancestry/:title', async (req, res) => {
     const titleNumber = req.params.title;
-    const titlesApiUrl = `https://www.ecfr.gov/api/versioner/v1/titles.json`;
+    const titlesApiUrl = `${BASE_URL}/api/versioner/v1/titles.json`;
 
     try {
         // 🔍 Step 1: Fetch the latest issue date
-        console.log("📥 Fetching latest issue date...");
+        console.log(`📥 Fetching latest issue date for Title ${titleNumber}...`);
         const titlesResponse = await axios.get(titlesApiUrl);
         const titlesData = titlesResponse.data.titles;
 
@@ -55,21 +55,21 @@ app.get('/api/ancestry/:title', async (req, res) => {
         }
         const latestDate = latestTitle.latest_issue_date;
 
-        // 🔍 Step 2: Fetch ancestry using the correct date
-        const ancestryUrl = `https://www.ecfr.gov/api/versioner/v1/ancestry/${latestDate}/title-${titleNumber}.json`;
-        console.log(`📥 Fetching ancestry for Title ${titleNumber} from ${ancestryUrl}...`);
+        // 🔍 Step 2: Fetch FULL ancestry (Title → Chapter → Subchapter → Part)
+        const ancestryUrl = `${BASE_URL}/api/versioner/v1/ancestry/${latestDate}/title-${titleNumber}.json?chapter=true&subchapter=true&part=true`;
+        console.log(`📥 Fetching full ancestry for Title ${titleNumber} from ${ancestryUrl}...`);
 
         const ancestryResponse = await axios.get(ancestryUrl);
-        res.json(ancestryResponse.data);
 
+        // ✅ Return full hierarchical structure
+        res.json(ancestryResponse.data);
     } catch (error) {
         console.error(`🚨 Error fetching ancestry for Title ${titleNumber}:`, error.message);
         res.status(500).json({ error: "Failed to fetch ancestry data" });
     }
 });
 
-
-// 📌 Fetch Word Count Data
+// 📌 Fetch Word Count Data (will be addressed after ancestry fix)
 app.get("/api/wordcounts", async (req, res) => {
     try {
         console.log("📥 Fetching word counts...");
