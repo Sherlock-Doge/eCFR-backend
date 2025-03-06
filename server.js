@@ -1,154 +1,118 @@
-// ✅ Backend URL (Updated to new backend service)
-const BACKEND_URL = "https://ecfr-backend-service.onrender.com";
+const express = require("express");
+const axios = require("axios");
+const NodeCache = require("node-cache");
+const { JSDOM } = require("jsdom");
 
-// 📌 Fetch eCFR Titles from Backend
-async function fetchTitles() {
+const app = express();
+const PORT = process.env.PORT || 10000;
+const BASE_URL = "https://www.ecfr.gov";
+
+// ✅ Initialize Cache (30-day persistence for efficiency)
+const wordCountCache = new NodeCache({ stdTTL: 2592000, checkperiod: 86400 });
+
+// ✅ Auto-Update Word Counts Every Month (30 days)
+const UPDATE_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000; // 30 Days
+
+// 📌 ✅ CORS Middleware - Allows frontend access
+app.use((req, res, next) => {
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Methods", "GET, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type");
+    next();
+});
+
+// 📌 Fetch Titles (Summary Info)
+app.get("/api/titles", async (req, res) => {
     try {
         console.log("📥 Fetching eCFR Titles...");
-        const response = await fetch(`${BACKEND_URL}/api/titles`);
-        if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
-
-        const data = await response.json();
-        console.log("✅ Titles Data:", data);
-        return data.titles || [];
+        const response = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
+        res.json(response.data);
     } catch (error) {
-        console.error("🚨 Error fetching titles:", error);
-        return [];
+        console.error("🚨 Error fetching titles:", error.message);
+        res.status(500).json({ error: "Failed to fetch title data" });
     }
-}
+});
 
-// 📌 Fetch Agency Data from Backend
-async function fetchAgencies() {
+// 📌 Fetch Agencies
+app.get("/api/agencies", async (req, res) => {
     try {
         console.log("📥 Fetching agency data...");
-        const response = await fetch(`${BACKEND_URL}/api/agencies`);
-        if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
-
-        const data = await response.json();
-        console.log("✅ Agencies Data:", data);
-        return data.agencies || [];
+        const response = await axios.get(`${BASE_URL}/api/admin/v1/agencies.json`);
+        res.json(response.data);
     } catch (error) {
-        console.error("🚨 Error fetching agencies:", error);
-        return [];
+        console.error("🚨 Error fetching agencies:", error.message);
+        res.status(500).json({ error: "Failed to fetch agency data" });
     }
-}
+});
 
-// 📌 Fetch Word Counts from Backend
-async function fetchWordCounts() {
-    try {
-        console.log("📥 Fetching word counts...");
-        const response = await fetch(`${BACKEND_URL}/api/wordcounts`);
-        if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+// 📌 Fetch Word Count for a Single Title (cached individually)
+app.get("/api/wordcount/:titleNumber", async (req, res) => {
+    const titleNumber = req.params.titleNumber;
 
-        const wordData = await response.json();
-        console.log("✅ Word Count Data:", wordData);
-        return wordData || {};
-    } catch (error) {
-        console.error("🚨 Error fetching word counts:", error);
-        return {};
+    // ✅ Check Cache First
+    let cachedWordCount = wordCountCache.get(`wordCount-${titleNumber}`);
+    if (cachedWordCount !== undefined) {
+        console.log(`✅ Returning cached word count for Title ${titleNumber}`);
+        return res.json({ title: titleNumber, wordCount: cachedWordCount });
     }
-}
 
-// 📌 Fetch Single Title Word Count
-async function fetchSingleTitleWordCount(titleNumber, buttonElement) {
     try {
         console.log(`📥 Fetching word count for Title ${titleNumber}...`);
-        buttonElement.textContent = "Fetching..."; // Show loading state
 
-        const response = await fetch(`${BACKEND_URL}/api/wordcount/${titleNumber}`);
-        if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+        // 🔍 Get Title Issue Date
+        const titlesResponse = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
+        const titleData = titlesResponse.data.titles.find(t => t.number.toString() === titleNumber);
 
-        const data = await response.json();
-        console.log(`✅ Word Count for Title ${titleNumber}:`, data.wordCount);
-
-        // ✅ Update button with word count
-        buttonElement.replaceWith(document.createTextNode(data.wordCount.toLocaleString()));
-    } catch (error) {
-        console.error(`🚨 Error fetching word count for Title ${titleNumber}:`, error);
-        buttonElement.textContent = "Retry"; // Allow retry
-    }
-}
-
-// 📌 Update Scoreboard (includes most recently amended title logic)
-function updateScoreboard(totalTitles, totalAgencies, mostRecentTitle, mostRecentDate, mostRecentTitleName) {
-    document.getElementById("totalTitles").textContent = totalTitles;
-    document.getElementById("totalAgencies").textContent = totalAgencies > 0 ? totalAgencies : "N/A";
-
-    const recentAmendedTitleElement = document.getElementById("recentAmendedTitle");
-    
-    if (mostRecentTitle && mostRecentTitleName) {
-        recentAmendedTitleElement.href = `https://www.ecfr.gov/current/title-${mostRecentTitle.replace("Title ", "")}`;
-        recentAmendedTitleElement.textContent = `${mostRecentTitle} - ${mostRecentTitleName}`;
-    } else {
-        recentAmendedTitleElement.textContent = "N/A";
-        recentAmendedTitleElement.removeAttribute("href");
-    }
-
-    document.getElementById("recentAmendedDate").textContent = mostRecentDate || "N/A";
-}
-
-// 📌 Main Function to Fetch and Populate Table
-async function fetchData() {
-    const tableBody = document.querySelector("#titlesTable tbody");
-    tableBody.innerHTML = "";
-
-    // 📌 Fetch Titles, Agencies & Word Counts in Parallel
-    const [titles, agencies, wordCounts] = await Promise.all([
-        fetchTitles(),
-        fetchAgencies(),
-        fetchWordCounts()
-    ]);
-
-    if (!titles.length) {
-        console.error("🚨 No Titles Data Received!");
-        return;
-    }
-
-    let mostRecentTitle = null;
-    let mostRecentTitleName = null;
-    let mostRecentDate = null;
-
-    // 📌 Populate Table and find the most recently amended title
-    titles.forEach(title => {
-        console.log(`🔍 Processing Title: ${title.number} - ${title.name}`);
-
-        const titleUrl = `https://www.ecfr.gov/current/title-${title.number}`;
-
-        // ✅ Keep your existing robust logic here:
-        if (!mostRecentDate || (title.latest_amended_on && title.latest_amended_on > mostRecentDate)) {
-            mostRecentDate = title.latest_amended_on;
-            mostRecentTitle = `Title ${title.number}`;
-            mostRecentTitleName = title.name;
+        if (!titleData) {
+            console.warn(`⚠️ Title ${titleNumber} not found`);
+            return res.status(404).json({ error: "Title not found" });
         }
 
-        // ✅ Display word counts from backend if available
-        const wordCountDisplay = wordCounts[title.number] 
-            ? wordCounts[title.number].toLocaleString() 
-            : `<button onclick="fetchSingleTitleWordCount(${title.number}, this)">Generate</button>`;
+        const issueDate = titleData.latest_issue_date;
+        console.log(`📥 Processing Title ${titleNumber} (Issued: ${issueDate})...`);
 
-        const rowHTML = `
-            <tr>
-                <td>${title.number}</td>
-                <td><a href="${titleUrl}" target="_blank">${title.name}</a></td>
-                <td>${title.up_to_date_as_of || "N/A"}</td>
-                <td>${title.latest_amended_on || "N/A"}</td>
-                <td>${wordCountDisplay}</td>
-            </tr>
-        `;
+        // 🔄 Fetch XML Content
+        const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${issueDate}/title-${titleNumber}.xml`;
+        const xmlResponse = await axios.get(xmlUrl, { responseType: "text" });
 
-        tableBody.insertAdjacentHTML("beforeend", rowHTML);
-    });
+        // 🔢 Count Words
+        const wordCount = countWordsFromXML(xmlResponse.data);
 
-    updateScoreboard(
-        titles.length,
-        agencies.length,
-        mostRecentTitle,
-        mostRecentDate,
-        mostRecentTitleName
-    );
+        // ✅ Cache Result
+        wordCountCache.set(`wordCount-${titleNumber}`, wordCount);
 
-    console.log("✅ Table populated successfully.");
+        console.log(`📊 Word Count for Title ${titleNumber}: ${wordCount}`);
+        res.json({ title: titleNumber, wordCount });
+    } catch (error) {
+        console.error(`🚨 Error processing Title ${titleNumber}:`, error.message);
+        res.status(500).json({ error: "Failed to fetch word count" });
+    }
+});
+
+// 📌 Extract Word Count from XML Content
+function countWordsFromXML(xmlData) {
+    try {
+        const dom = new JSDOM(xmlData);
+        const textContent = dom.window.document.body.textContent || "";
+
+        // 🔍 Remove Special Characters, Keep Only Words
+        const cleanText = textContent.replace(/[^a-zA-Z0-9\s]/g, "");
+        const words = cleanText.split(/\s+/).filter(word => word.length > 0);
+
+        return words.length;
+    } catch (error) {
+        console.error("⚠️ Error parsing XML:", error.message);
+        return 0;
+    }
 }
 
-// 📌 Start Fetching Data on Load
-fetchData();
+// 📌 Auto-Update Word Counts Every Month
+setInterval(() => {
+    console.log("🔄 Auto-updating word counts...");
+    wordCountCache.flushAll(); // Clears cache before updating
+}, UPDATE_INTERVAL_MS);
+
+// 📌 Start the Server
+app.listen(PORT, () => {
+    console.log(`✅ Server running on port ${PORT}`);
+});
