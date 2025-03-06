@@ -7,10 +7,11 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 const BASE_URL = "https://www.ecfr.gov";
 
-// ✅ Initialize Cache (Extended 60-day persistence for efficiency)
+// ✅ Initialize Cache (Word Counts: 60 days, Metadata: 24 hours)
 const wordCountCache = new NodeCache({ stdTTL: 5184000, checkperiod: 86400 });
+const metadataCache = new NodeCache({ stdTTL: 86400, checkperiod: 3600 }); // Cache metadata for 24 hours
 
-// ✅ Auto-Update Word Counts Every 30 Days - FIXED: Runs only when needed
+// ✅ Auto-Update Word Counts Every 30 Days (Runs only when needed)
 const UPDATE_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000; // 30 Days
 let lastUpdate = Date.now();
 
@@ -22,19 +23,37 @@ app.use((req, res, next) => {
     next();
 });
 
-// 📌 Fetch Titles (Summary Info)
+// 📌 Fetch Titles (Summary Info) with Caching
 app.get("/api/titles", async (req, res) => {
     try {
-        console.log("📥 Fetching eCFR Titles...");
-        const response = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
-        res.json(response.data);
+        let cachedTitles = metadataCache.get("titlesMetadata");
+
+        if (!cachedTitles) {
+            console.log("📥 Fetching eCFR Titles (Not in cache)...");
+            const response = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
+
+            // 🏪 Store only necessary metadata (Title number + issue date)
+            cachedTitles = response.data.titles.map(t => ({
+                number: t.number,
+                name: t.name,
+                latest_issue_date: t.latest_issue_date,
+                latest_amended_on: t.latest_amended_on,
+                up_to_date_as_of: t.up_to_date_as_of
+            }));
+
+            metadataCache.set("titlesMetadata", cachedTitles); // ✅ Cache for 24 hours
+        } else {
+            console.log("✅ Using cached Titles Metadata...");
+        }
+
+        res.json({ titles: cachedTitles });
     } catch (error) {
         console.error("🚨 Error fetching titles:", error.message);
         res.status(500).json({ error: "Failed to fetch title data" });
     }
 });
 
-// 📌 Fetch Agencies
+// 📌 Fetch Agencies (No Change)
 app.get("/api/agencies", async (req, res) => {
     try {
         console.log("📥 Fetching agency data...");
@@ -60,9 +79,23 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
     try {
         console.log(`📥 Fetching word count for Title ${titleNumber}...`);
 
-        // 🔍 Get Title Issue Date
-        const titlesResponse = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
-        const titleData = titlesResponse.data.titles.find(t => t.number.toString() === titleNumber);
+        // 🔍 Use Cached Title Metadata
+        let cachedTitlesMetadata = metadataCache.get("titlesMetadata");
+
+        if (!cachedTitlesMetadata) {
+            console.log("📥 Titles Metadata Not in Cache - Fetching...");
+            const titlesResponse = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
+
+            cachedTitlesMetadata = titlesResponse.data.titles.map(t => ({
+                number: t.number,
+                latest_issue_date: t.latest_issue_date
+            }));
+
+            metadataCache.set("titlesMetadata", cachedTitlesMetadata, 86400);
+        }
+
+        // 🔍 Find the Title’s issue date
+        const titleData = cachedTitlesMetadata.find(t => t.number.toString() === titleNumber);
 
         if (!titleData) {
             console.warn(`⚠️ Title ${titleNumber} not found`);
