@@ -45,58 +45,49 @@ app.get("/api/agencies", async (req, res) => {
     }
 });
 
-// 📌 Fetch Word Counts (Cached for Fast Access)
-app.get("/api/wordcounts", async (req, res) => {
-    let cachedWordCounts = wordCountCache.get("wordCounts");
-    if (cachedWordCounts) {
-        console.log("✅ Returning cached word counts");
-        return res.json(cachedWordCounts);
+// 📌 Fetch Word Count for a Single Title (New Approach)
+app.get("/api/wordcount/:titleNumber", async (req, res) => {
+    const titleNumber = req.params.titleNumber;
+
+    // ✅ Check Cache First
+    let cachedWordCount = wordCountCache.get(`wordCount-${titleNumber}`);
+    if (cachedWordCount !== undefined) {
+        console.log(`✅ Returning cached word count for Title ${titleNumber}`);
+        return res.json({ title: titleNumber, wordCount: cachedWordCount });
     }
 
-    console.log("📥 Word counts not found in cache. Fetching new data...");
-    let wordCounts = await fetchAndCacheWordCounts();
-    res.json(wordCounts);
-});
-
-// 📌 Fetch and Cache Word Counts (Runs Monthly)
-async function fetchAndCacheWordCounts() {
     try {
-        console.log("🔄 Updating word counts...");
+        console.log(`📥 Fetching word count for Title ${titleNumber}...`);
+
+        // 🔍 Get Title Issue Date
         const titlesResponse = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
-        const titles = titlesResponse.data.titles;
-        let wordCounts = {};
+        const titleData = titlesResponse.data.titles.find(t => t.number.toString() === titleNumber);
 
-        // 🏗️ Process in parallel (5 at a time to avoid overload)
-        const BATCH_SIZE = 5;
-        for (let i = 0; i < titles.length; i += BATCH_SIZE) {
-            const batch = titles.slice(i, i + BATCH_SIZE);
-            await Promise.all(batch.map(async (title) => {
-                const titleNumber = title.number;
-                const issueDate = title.latest_issue_date;
-                console.log(`📥 Processing Title ${titleNumber} (Issued: ${issueDate})...`);
-
-                try {
-                    const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${issueDate}/title-${titleNumber}.xml`;
-                    const xmlResponse = await axios.get(xmlUrl, { responseType: "text" });
-                    const wordCount = countWordsFromXML(xmlResponse.data);
-                    wordCounts[titleNumber] = wordCount;
-
-                    console.log(`📊 Word Count for Title ${titleNumber}: ${wordCount}`);
-                } catch (error) {
-                    console.warn(`⚠️ Error processing Title ${titleNumber}: ${error.message}`);
-                }
-            }));
+        if (!titleData) {
+            console.warn(`⚠️ Title ${titleNumber} not found`);
+            return res.status(404).json({ error: "Title not found" });
         }
 
-        // ✅ Save in Cache
-        wordCountCache.set("wordCounts", wordCounts);
-        console.log("✅ Word count update complete.");
-        return wordCounts;
+        const issueDate = titleData.latest_issue_date;
+        console.log(`📥 Processing Title ${titleNumber} (Issued: ${issueDate})...`);
+
+        // 🔄 Fetch XML Content
+        const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${issueDate}/title-${titleNumber}.xml`;
+        const xmlResponse = await axios.get(xmlUrl, { responseType: "text" });
+
+        // 🔢 Count Words
+        const wordCount = countWordsFromXML(xmlResponse.data);
+
+        // ✅ Cache Result
+        wordCountCache.set(`wordCount-${titleNumber}`, wordCount);
+
+        console.log(`📊 Word Count for Title ${titleNumber}: ${wordCount}`);
+        res.json({ title: titleNumber, wordCount });
     } catch (error) {
-        console.error("🚨 Error updating word counts:", error.message);
-        return {};
+        console.error(`🚨 Error processing Title ${titleNumber}:`, error.message);
+        res.status(500).json({ error: "Failed to fetch word count" });
     }
-}
+});
 
 // 📌 Extract Word Count from XML Content
 function countWordsFromXML(xmlData) {
@@ -117,7 +108,10 @@ function countWordsFromXML(xmlData) {
 }
 
 // 📌 Auto-Update Word Counts Every Month
-setInterval(fetchAndCacheWordCounts, UPDATE_INTERVAL_MS);
+setInterval(() => {
+    console.log("🔄 Auto-updating word counts...");
+    wordCountCache.flushAll(); // Clears cache before updating
+}, UPDATE_INTERVAL_MS);
 
 // 📌 Start the Server
 app.listen(PORT, () => {
