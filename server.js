@@ -5,15 +5,12 @@ const { JSDOM } = require("jsdom");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
-
-// ✅ Your backend URL is https://ecfr-backend-service.onrender.com
-// ✅ Keep BASE_URL pointed to the official eCFR API.
 const BASE_URL = "https://www.ecfr.gov";
 
 // ✅ Initialize Cache (30-day persistence for efficiency)
 const wordCountCache = new NodeCache({ stdTTL: 2592000, checkperiod: 86400 });
 
-// ✅ Auto-Update Word Counts Monthly
+// ✅ Auto-Update Word Counts Every Month (30 days)
 const UPDATE_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000; // 30 Days
 
 // 📌 ✅ CORS Middleware - Allows frontend access
@@ -28,7 +25,7 @@ app.use((req, res, next) => {
 app.get("/api/titles", async (req, res) => {
     try {
         console.log("📥 Fetching eCFR Titles...");
-        const response = await axios.get(`https://www.ecfr.gov/api/versioner/v1/titles.json`);
+        const response = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
         res.json(response.data);
     } catch (error) {
         console.error("🚨 Error fetching titles:", error.message);
@@ -40,7 +37,7 @@ app.get("/api/titles", async (req, res) => {
 app.get("/api/agencies", async (req, res) => {
     try {
         console.log("📥 Fetching agency data...");
-        const response = await axios.get(`https://www.ecfr.gov/api/admin/v1/agencies.json`);
+        const response = await axios.get(`${BASE_URL}/api/admin/v1/agencies.json`);
         res.json(response.data);
     } catch (error) {
         console.error("🚨 Error fetching agencies:", error.message);
@@ -48,7 +45,7 @@ app.get("/api/agencies", async (req, res) => {
     }
 });
 
-// 📌 Fetch Word Count for Individual Title (Cached)
+// 📌 Fetch Word Count for a Single Title (cached individually)
 app.get("/api/wordcount/:titleNumber", async (req, res) => {
     const titleNumber = req.params.titleNumber;
 
@@ -59,9 +56,11 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
         return res.json({ title: titleNumber, wordCount: cachedWordCount });
     }
 
-    console.log(`📥 Fetching word count for Title ${titleNumber}...`);
     try {
-        const titlesResponse = await axios.get(`https://www.ecfr.gov/api/versioner/v1/titles.json`);
+        console.log(`📥 Fetching word count for Title ${titleNumber}...`);
+
+        // 🔍 Get Title Issue Date
+        const titlesResponse = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
         const titleData = titlesResponse.data.titles.find(t => t.number.toString() === titleNumber);
 
         if (!titleData) {
@@ -70,17 +69,62 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
         }
 
         const issueDate = titleData.latest_issue_date;
-        const xmlUrl = `https://www.ecfr.gov/api/versioner/v1/full/${issueDate}/title-${titleNumber}.xml`;
+        console.log(`📥 Processing Title ${titleNumber} (Issued: ${issueDate})...`);
+
+        // 🔄 Fetch XML Content
+        const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${issueDate}/title-${titleNumber}.xml`;
         const xmlResponse = await axios.get(xmlUrl, { responseType: "text" });
 
+        // 🔢 Count Words
         const wordCount = countWordsFromXML(xmlResponse.data);
-        wordCountCache.set(`wordCount-${titleNumber}`, wordCount);
-        console.log(`📊 Word Count for Title ${titleNumber}: ${wordCount}`);
 
-        res.json({ title: titleNumber, wordCount: wordCount });
+        // ✅ Cache Result
+        wordCountCache.set(`wordCount-${titleNumber}`, wordCount);
+
+        console.log(`📊 Word Count for Title ${titleNumber}: ${wordCount}`);
+        res.json({ title: titleNumber, wordCount });
     } catch (error) {
-        console.error(`🚨 Error fetching word count for Title ${titleNumber}:`, error.message);
+        console.error(`🚨 Error processing Title ${titleNumber}:`, error.message);
         res.status(500).json({ error: "Failed to fetch word count" });
+    }
+});
+
+// 📌 Fetch and Cache All Word Counts (Runs Monthly)
+async function fetchAndCacheWordCounts() {
+    try {
+        console.log("🔄 Updating word counts for all titles...");
+        const titlesResponse = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
+        const titles = titlesResponse.data.titles;
+        let wordCounts = {};
+
+        // 🏗️ Process in parallel (5 at a time to avoid overload)
+        const BATCH_SIZE = 5;
+        for (let i = 0; i < titles.length; i += BATCH_SIZE) {
+            const batch = titles.slice(i, i + BATCH_SIZE);
+            await Promise.all(batch.map(async (title) => {
+                const titleNumber = title.number;
+                const issueDate = title.latest_issue_date;
+                console.log(`📥 Processing Title ${titleNumber} (Issued: ${issueDate})...`);
+
+                try {
+                    const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${issueDate}/title-${titleNumber}.xml`;
+                    const xmlResponse = await axios.get(xmlUrl, { responseType: "text" });
+                    const wordCount = countWordsFromXML(xmlResponse.data);
+                    wordCounts[titleNumber] = wordCount;
+
+                    // ✅ Cache individual title
+                    wordCountCache.set(`wordCount-${titleNumber}`, wordCount);
+
+                    console.log(`📊 Word Count for Title ${titleNumber}: ${wordCount}`);
+                } catch (error) {
+                    console.warn(`⚠️ Error processing Title ${titleNumber}: ${error.message}`);
+                }
+            }));
+        }
+
+        console.log("✅ Monthly word count update complete.");
+    } catch (error) {
+        console.error("🚨 Error updating monthly word counts:", error.message);
     }
 }
 
@@ -101,37 +145,7 @@ function countWordsFromXML(xmlData) {
     }
 }
 
-// 📌 Monthly Auto-Update of All Word Counts (background)
-async function fetchAndCacheAllWordCounts() {
-    console.log("🔄 Starting monthly update for all Title word counts...");
-    try {
-        const titlesResponse = await axios.get(`https://www.ecfr.gov/api/versioner/v1/titles.json`);
-        const titles = titlesResponse.data.titles;
-
-        for (let title of titles) {
-            const titleNumber = title.number;
-            const issueDate = title.latest_issue_date;
-            console.log(`📥 Auto-updating Title ${titleNumber}...`);
-
-            try {
-                const xmlUrl = `https://www.ecfr.gov/api/versioner/v1/full/${issueDate}/title-${titleNumber}.xml`;
-                const xmlResponse = await axios.get(xmlUrl, { responseType: "text" });
-                const wordCount = countWordsFromXML(xmlResponse.data);
-
-                // Cache individual title word counts
-                wordCountCache.set(`wordCount-${titleNumber}`, wordCount);
-                console.log(`✅ Updated word count for Title ${titleNumber}: ${wordCount}`);
-            } catch (titleError) {
-                console.warn(`⚠️ Failed to auto-update Title ${titleNumber}: ${titleError.message}`);
-            }
-        }
-        console.log("✅ Monthly auto-update completed.");
-    } catch (error) {
-        console.error("🚨 Error during monthly word count update:", error.message);
-    }
-}
-
-// 📌 Start Auto-Update Monthly
+// 📌 Auto-Update Word Counts Every Month
 setInterval(fetchAndCacheWordCounts, UPDATE_INTERVAL_MS);
 
 // 📌 Start the Server
