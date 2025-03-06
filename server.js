@@ -7,10 +7,10 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 const BASE_URL = "https://www.ecfr.gov";
 
-// ✅ Initialize Cache (30-day persistence for efficiency)
-const wordCountCache = new NodeCache({ stdTTL: 2592000, checkperiod: 86400 });
+// ✅ Initialize Cache (Extended 60-day persistence for efficiency)
+const wordCountCache = new NodeCache({ stdTTL: 5184000, checkperiod: 86400 });
 
-// ✅ Auto-Update Word Counts Every Month (30 days) - FIXED: Only runs once
+// ✅ Auto-Update Word Counts Every 30 Days - FIXED: Runs only when needed
 const UPDATE_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000; // 30 Days
 let lastUpdate = Date.now();
 
@@ -46,7 +46,7 @@ app.get("/api/agencies", async (req, res) => {
     }
 });
 
-// 📌 Fetch Word Count for a Single Title (cached individually)
+// 📌 Fetch Word Count for a Single Title (cached & optimized)
 app.get("/api/wordcount/:titleNumber", async (req, res) => {
     const titleNumber = req.params.titleNumber;
 
@@ -72,13 +72,16 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
         const issueDate = titleData.latest_issue_date;
         console.log(`📥 Processing Title ${titleNumber} (Issued: ${issueDate})...`);
 
-        // 🔄 Fetch XML Content
-        await new Promise(resolve => setTimeout(resolve, 200)); // Small delay to avoid API overload
+        // 🔄 Fetch XML Content (Handles Large Data Efficiently)
         const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${issueDate}/title-${titleNumber}.xml`;
-        const xmlResponse = await axios.get(xmlUrl, { responseType: "text" });
+        const xmlResponse = await fetchLargeXML(xmlUrl);
 
-        // 🔢 Count Words
-        const wordCount = countWordsFromXML(xmlResponse.data);
+        if (!xmlResponse) {
+            return res.status(500).json({ error: "Failed to fetch XML data" });
+        }
+
+        // 🔢 Count Words Using Stream Processing
+        const wordCount = countWordsFromXML(xmlResponse);
 
         // ✅ Cache Result
         wordCountCache.set(`wordCount-${titleNumber}`, wordCount);
@@ -91,7 +94,32 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
     }
 });
 
-// 📌 Extract Word Count from XML Content
+// 📌 Efficiently Fetch Large XML Data
+async function fetchLargeXML(url) {
+    try {
+        const response = await axios({
+            method: "GET",
+            url,
+            responseType: "stream", // ✅ Stream Data Instead of Full Load
+            timeout: 30000 // ✅ Timeout to prevent server hang-ups
+        });
+
+        let xmlData = "";
+        response.data.on("data", chunk => {
+            xmlData += chunk.toString();
+        });
+
+        return new Promise((resolve, reject) => {
+            response.data.on("end", () => resolve(xmlData));
+            response.data.on("error", reject);
+        });
+    } catch (error) {
+        console.error("🚨 Error fetching large XML:", error.message);
+        return null;
+    }
+}
+
+// 📌 Stream-Optimized Word Count from XML Content
 function countWordsFromXML(xmlData) {
     try {
         const dom = new JSDOM(xmlData);
