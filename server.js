@@ -10,8 +10,9 @@ const BASE_URL = "https://www.ecfr.gov";
 // ✅ Initialize Cache (30-day persistence for efficiency)
 const wordCountCache = new NodeCache({ stdTTL: 2592000, checkperiod: 86400 });
 
-// ✅ Auto-Update Word Counts Every Month (30 days)
+// ✅ Auto-Update Word Counts Every Month (30 days) - FIXED: Only runs once
 const UPDATE_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000; // 30 Days
+let lastUpdate = Date.now();
 
 // 📌 ✅ CORS Middleware - Allows frontend access
 app.use((req, res, next) => {
@@ -72,6 +73,7 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
         console.log(`📥 Processing Title ${titleNumber} (Issued: ${issueDate})...`);
 
         // 🔄 Fetch XML Content
+        await new Promise(resolve => setTimeout(resolve, 200)); // Small delay to avoid API overload
         const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${issueDate}/title-${titleNumber}.xml`;
         const xmlResponse = await axios.get(xmlUrl, { responseType: "text" });
 
@@ -106,11 +108,14 @@ function countWordsFromXML(xmlData) {
     }
 }
 
-// 📌 Auto-Update Word Counts Every Month
+// 📌 Auto-Update Word Counts (Runs ONCE per Month)
 setInterval(() => {
-    console.log("🔄 Auto-updating word counts...");
-    wordCountCache.flushAll(); // Clears cache before updating
-}, UPDATE_INTERVAL_MS);
+    if (Date.now() - lastUpdate >= UPDATE_INTERVAL_MS) {
+        console.log("🔄 Auto-updating word counts...");
+        wordCountCache.flushAll();
+        lastUpdate = Date.now();
+    }
+}, 60 * 60 * 1000); // Check every hour
 
 // 📌 Start the Server
 app.listen(PORT, () => {
