@@ -11,10 +11,10 @@ const BASE_URL = "https://www.ecfr.gov";
 // ✅ Initialize Cache (30-day persistence)
 const wordCountCache = new NodeCache({ stdTTL: 2592000, checkperiod: 86400 });
 
-// ✅ Auto-Update Word Counts Every Month (30 days)
-const UPDATE_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000; // 30 Days
+// ✅ Auto-Update Word Counts Every Month (Adjusted to 24.8 days)
+const UPDATE_INTERVAL_MS = 2147483647; // Max allowed by setInterval (~24.8 days)
 
-// 📌 ✅ CORS Middleware (Properly configured)
+// 📌 ✅ CORS Middleware (Fixing Fetching Issues)
 app.use(cors());
 
 // 📌 Fetch Titles (Summary Info)
@@ -73,29 +73,31 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
     }
 });
 
-// 📌 Monthly Bulk Cache Refresh
+// 📌 Monthly Bulk Cache Refresh (with Rate-Limiting)
 async function fetchAndCacheWordCounts() {
     try {
+        console.log("🔄 Updating word counts for all titles...");
         const titlesResponse = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
         const titles = titlesResponse.data.titles;
 
-        const BATCH_SIZE = 5;
-        for (let i = 0; i < titles.length; i += BATCH_SIZE) {
-            const batch = titles.slice(i, i + BATCH_SIZE);
-            await Promise.all(batch.map(async (title) => {
-                const titleNumber = title.number;
-                const issueDate = title.latest_issue_date;
+        for (const title of titles) {
+            const titleNumber = title.number;
+            const issueDate = title.latest_issue_date;
 
-                try {
-                    const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${issueDate}/title-${titleNumber}.xml`;
-                    const xmlResponse = await axios.get(xmlUrl, { responseType: "text" });
-                    const wordCount = countWordsFromXML(xmlResponse.data);
+            try {
+                const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${issueDate}/title-${titleNumber}.xml`;
+                const xmlResponse = await axios.get(xmlUrl, { responseType: "text" });
 
-                    wordCountCache.set(`wordCount-${titleNumber}`, wordCount);
-                } catch (error) {
-                    console.warn(`⚠️ Error processing Title ${titleNumber}: ${error.message}`);
-                }
-            }));
+                const wordCount = countWordsFromXML(xmlResponse.data);
+                wordCountCache.set(`wordCount-${titleNumber}`, wordCount);
+
+                console.log(`📊 Word Count for Title ${titleNumber}: ${wordCount}`);
+            } catch (error) {
+                console.warn(`⚠️ Error processing Title ${titleNumber}: ${error.message}`);
+            }
+
+            // ⏳ Add a delay of 5 seconds before the next request to avoid rate-limiting
+            await new Promise(resolve => setTimeout(resolve, 5000));
         }
         console.log("✅ Monthly word count update complete.");
     } catch (error) {
@@ -117,7 +119,7 @@ function countWordsFromXML(xmlData) {
     }
 }
 
-// 📌 Auto-Update Word Counts Monthly
+// 📌 Auto-Update Word Counts Every 24.8 Days (Fixed Timeout Issue)
 setInterval(fetchAndCacheWordCounts, UPDATE_INTERVAL_MS);
 
 // 📌 Start the Server
