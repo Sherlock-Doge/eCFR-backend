@@ -107,14 +107,11 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
 
         // 🔄 Fetch XML Content (Handles Large Data Efficiently)
         const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${issueDate}/title-${titleNumber}.xml`;
-        const xmlResponse = await fetchLargeXML(xmlUrl);
+        const wordCount = await streamAndCountWords(xmlUrl);
 
-        if (!xmlResponse) {
+        if (wordCount === null) {
             return res.status(500).json({ error: "Failed to fetch XML data" });
         }
-
-        // 🔢 Count Words Using Stream Processing
-        const wordCount = countWordsFromXML(xmlResponse);
 
         // ✅ Cache Result
         wordCountCache.set(`wordCount-${titleNumber}`, wordCount);
@@ -127,45 +124,37 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
     }
 });
 
-// 📌 Efficiently Fetch Large XML Data
-async function fetchLargeXML(url) {
+// 📌 Efficiently Fetch and Stream-Process XML Data
+async function streamAndCountWords(url) {
     try {
         const response = await axios({
             method: "GET",
             url,
             responseType: "stream", // ✅ Stream Data Instead of Full Load
-            timeout: 30000 // ✅ Timeout to prevent server hang-ups
+            timeout: 60000 // ✅ Increased timeout to prevent disconnects
         });
 
-        let xmlData = "";
-        response.data.on("data", chunk => {
-            xmlData += chunk.toString();
-        });
+        let wordCount = 0;
+        let buffer = "";
 
         return new Promise((resolve, reject) => {
-            response.data.on("end", () => resolve(xmlData));
+            response.data.on("data", chunk => {
+                buffer += chunk.toString();
+                let words = buffer.split(/\s+/);
+                wordCount += words.length - 1; // Process all but the last incomplete word
+                buffer = words.pop(); // Keep last word in buffer (it might be incomplete)
+            });
+
+            response.data.on("end", () => {
+                if (buffer.length > 0) wordCount++; // Add final word if any remains
+                resolve(wordCount);
+            });
+
             response.data.on("error", reject);
         });
     } catch (error) {
-        console.error("🚨 Error fetching large XML:", error.message);
+        console.error("🚨 Error streaming XML:", error.message);
         return null;
-    }
-}
-
-// 📌 Stream-Optimized Word Count from XML Content
-function countWordsFromXML(xmlData) {
-    try {
-        const dom = new JSDOM(xmlData);
-        const textContent = dom.window.document.body.textContent || "";
-
-        // 🔍 Remove Special Characters, Keep Only Words
-        const cleanText = textContent.replace(/[^a-zA-Z0-9\s]/g, "");
-        const words = cleanText.split(/\s+/).filter(word => word.length > 0);
-
-        return words.length;
-    } catch (error) {
-        console.error("⚠️ Error parsing XML:", error.message);
-        return 0;
     }
 }
 
