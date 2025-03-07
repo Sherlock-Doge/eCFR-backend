@@ -1,7 +1,6 @@
 const express = require("express");
 const axios = require("axios");
 const NodeCache = require("node-cache");
-const { JSDOM } = require("jsdom");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -10,10 +9,6 @@ const BASE_URL = "https://www.ecfr.gov";
 // ✅ Initialize Cache (Word Counts: 60 days, Metadata: 24 hours)
 const wordCountCache = new NodeCache({ stdTTL: 5184000, checkperiod: 86400 });
 const metadataCache = new NodeCache({ stdTTL: 86400, checkperiod: 3600 }); // Cache metadata for 24 hours
-
-// ✅ Auto-Update Word Counts Every 30 Days (Runs only when needed)
-const UPDATE_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000; // 30 Days
-let lastUpdate = Date.now();
 
 // 📌 ✅ CORS Middleware - Allows frontend access
 app.use((req, res, next) => {
@@ -88,6 +83,7 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
 
             cachedTitlesMetadata = titlesResponse.data.titles.map(t => ({
                 number: t.number,
+                name: t.name,
                 latest_issue_date: t.latest_issue_date
             }));
 
@@ -100,6 +96,11 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
         if (!titleData) {
             console.warn(`⚠️ Title ${titleNumber} not found`);
             return res.status(404).json({ error: "Title not found" });
+        }
+
+        if (titleData.name === "Reserved") {
+            console.log(`⚠️ Title ${titleNumber} is Reserved (Empty). Returning 0 words.`);
+            return res.json({ title: titleNumber, wordCount: 0 });
         }
 
         const issueDate = titleData.latest_issue_date;
@@ -157,15 +158,6 @@ async function streamAndCountWords(url) {
         return null;
     }
 }
-
-// 📌 Auto-Update Word Counts (Runs ONCE per Month)
-setInterval(() => {
-    if (Date.now() - lastUpdate >= UPDATE_INTERVAL_MS) {
-        console.log("🔄 Auto-updating word counts...");
-        wordCountCache.flushAll();
-        lastUpdate = Date.now();
-    }
-}, 60 * 60 * 1000); // Check every hour
 
 // 📌 Start the Server
 app.listen(PORT, () => {
