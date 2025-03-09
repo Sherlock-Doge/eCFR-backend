@@ -1,184 +1,204 @@
-const express = require("express");
-const axios = require("axios");
-const NodeCache = require("node-cache");
+// ✅ Backend URL (Updated to new backend service)
+const BACKEND_URL = "https://ecfr-backend-service.onrender.com";
 
-const app = express();
-const PORT = process.env.PORT || 10000;
-const BASE_URL = "https://www.ecfr.gov";
-
-// ✅ Initialize Cache (Word Counts: 60 days, Metadata: 24 hours, Search Suggestions: 12 hours)
-const wordCountCache = new NodeCache({ stdTTL: 5184000, checkperiod: 86400 });
-const metadataCache = new NodeCache({ stdTTL: 86400, checkperiod: 3600 });
-const suggestionCache = new NodeCache({ stdTTL: 43200, checkperiod: 3600 });
-
-// 📌 ✅ CORS Middleware - Allows frontend access
-app.use((req, res, next) => {
-    res.header("Access-Control-Allow-Origin", "*");
-    res.header("Access-Control-Allow-Methods", "GET, OPTIONS");
-    res.header("Access-Control-Allow-Headers", "Content-Type");
-    next();
-});
-
-// 📌 Fetch Titles (Summary Info) with Caching
-app.get("/api/titles", async (req, res) => {
+// 📌 Fetch eCFR Titles from Backend
+async function fetchTitles() {
     try {
-        let cachedTitles = metadataCache.get("titlesMetadata");
-
-        if (!cachedTitles) {
-            console.log("📥 Fetching eCFR Titles (Not in cache)...");
-            const response = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
-            cachedTitles = response.data.titles.map(t => ({
-                number: t.number,
-                name: t.name,
-                latest_issue_date: t.latest_issue_date,
-                latest_amended_on: t.latest_amended_on,
-                up_to_date_as_of: t.up_to_date_as_of
-            }));
-            metadataCache.set("titlesMetadata", cachedTitles);
-        } else {
-            console.log("✅ Using cached Titles Metadata...");
-        }
-
-        res.json({ titles: cachedTitles });
+        console.log("📥 Fetching eCFR Titles...");
+        const response = await fetch(`${BACKEND_URL}/api/titles`);
+        if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+        const data = await response.json();
+        console.log("✅ Titles Data:", data);
+        return data.titles || [];
     } catch (error) {
-        console.error("🚨 Error fetching titles:", error.message);
-        res.status(500).json({ error: "Failed to fetch title data" });
-    }
-});
-
-// 📌 Fetch Agencies
-app.get("/api/agencies", async (req, res) => {
-    try {
-        console.log("📥 Fetching agency data...");
-        const response = await axios.get(`${BASE_URL}/api/admin/v1/agencies.json`);
-        res.json(response.data);
-    } catch (error) {
-        console.error("🚨 Error fetching agencies:", error.message);
-        res.status(500).json({ error: "Failed to fetch agency data" });
-    }
-});
-
-// 📌 Fetch Word Count for a Single Title
-app.get("/api/wordcount/:titleNumber", async (req, res) => {
-    const titleNumber = req.params.titleNumber;
-    let cachedWordCount = wordCountCache.get(`wordCount-${titleNumber}`);
-    if (cachedWordCount !== undefined) {
-        console.log(`✅ Returning cached word count for Title ${titleNumber}`);
-        return res.json({ title: titleNumber, wordCount: cachedWordCount });
-    }
-
-    try {
-        console.log(`📥 Fetching word count for Title ${titleNumber}...`);
-        let cachedTitlesMetadata = metadataCache.get("titlesMetadata");
-
-        if (!cachedTitlesMetadata) {
-            const titlesResponse = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
-            cachedTitlesMetadata = titlesResponse.data.titles.map(t => ({
-                number: t.number,
-                name: t.name,
-                latest_issue_date: t.latest_issue_date
-            }));
-            metadataCache.set("titlesMetadata", cachedTitlesMetadata);
-        }
-
-        const titleData = cachedTitlesMetadata.find(t => t.number.toString() === titleNumber);
-        if (!titleData) return res.status(404).json({ error: "Title not found" });
-        if (titleData.name === "Reserved") return res.json({ title: titleNumber, wordCount: 0 });
-
-        const issueDate = titleData.latest_issue_date;
-        const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${issueDate}/title-${titleNumber}.xml`;
-        const wordCount = await streamAndCountWords(xmlUrl);
-
-        if (wordCount === null) return res.status(500).json({ error: "Failed to fetch XML data" });
-
-        wordCountCache.set(`wordCount-${titleNumber}`, wordCount);
-        res.json({ title: titleNumber, wordCount });
-    } catch (error) {
-        console.error(`🚨 Error processing Title ${titleNumber}:`, error.message);
-        res.status(500).json({ error: "Failed to fetch word count" });
-    }
-});
-
-// 📌 Efficient Stream Word Count
-async function streamAndCountWords(url) {
-    try {
-        const response = await axios({
-            method: "GET",
-            url,
-            responseType: "stream",
-            timeout: 60000
-        });
-
-        let wordCount = 0;
-        let buffer = "";
-
-        return new Promise((resolve, reject) => {
-            response.data.on("data", chunk => {
-                buffer += chunk.toString();
-                const words = buffer.split(/\s+/);
-                wordCount += words.length - 1;
-                buffer = words.pop();
-            });
-
-            response.data.on("end", () => {
-                if (buffer.length > 0) wordCount++;
-                resolve(wordCount);
-            });
-
-            response.data.on("error", reject);
-        });
-    } catch (error) {
-        console.error("🚨 Error streaming XML:", error.message);
-        return null;
+        console.error("🚨 Error fetching titles:", error);
+        return [];
     }
 }
 
-// ✅ 🔍 SEARCH API: /api/search
-app.get("/api/search", async (req, res) => {
+// 📌 Fetch Agency Data from Backend
+async function fetchAgencies() {
     try {
-        const params = { ...req.query };
-        const response = await axios.get(`${BASE_URL}/api/search/v1/results`, { params });
-        res.json(response.data);
+        console.log("📥 Fetching agency data...");
+        const response = await fetch(`${BACKEND_URL}/api/agencies`);
+        if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+        const data = await response.json();
+        console.log("✅ Agencies Data:", data);
+        return data.agencies || [];
     } catch (error) {
-        console.error("🚨 Error in /api/search:", error.message);
-        res.status(500).json({ error: "Search failed" });
+        console.error("🚨 Error fetching agencies:", error);
+        return [];
     }
-});
+}
 
-// ✅ 🔍 SEARCH COUNT API: /api/search/count
-app.get("/api/search/count", async (req, res) => {
+// 📌 Fetch Word Count for a Single Title
+async function fetchSingleTitleWordCount(titleNumber, buttonElement) {
     try {
-        const params = { ...req.query };
-        const response = await axios.get(`${BASE_URL}/api/search/v1/count`, { params });
-        res.json(response.data);
+        console.log(`📥 Fetching word count for Title ${titleNumber}...`);
+        buttonElement.textContent = "Fetching...";
+        buttonElement.disabled = true;
+        const statusText = document.createElement("span");
+        statusText.textContent = " This may take a few moments...";
+        statusText.style.color = "gray";
+        buttonElement.parentElement.appendChild(statusText);
+        const response = await fetch(`${BACKEND_URL}/api/wordcount/${titleNumber}`);
+        if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+        const data = await response.json();
+        console.log(`✅ Word Count for Title ${titleNumber}:`, data.wordCount);
+        buttonElement.parentElement.innerHTML = data.wordCount.toLocaleString();
     } catch (error) {
-        console.error("🚨 Error in /api/search/count:", error.message);
-        res.status(500).json({ error: "Search count failed" });
+        console.error(`🚨 Error fetching word count for Title ${titleNumber}:`, error);
+        buttonElement.textContent = "Retry";
+        buttonElement.disabled = false;
     }
-});
+}
 
-// ✅ 🔍 SEARCH SUGGESTIONS API: /api/search/suggestions
-app.get("/api/search/suggestions", async (req, res) => {
-    const query = req.query.query || "";
-    const cacheKey = `suggestions-${query.toLowerCase()}`;
+// 📌 Update Scoreboard
+function updateScoreboard(totalTitles, totalAgencies, mostRecentTitle, mostRecentDate, mostRecentTitleName) {
+    document.getElementById("totalTitles").textContent = totalTitles;
+    document.getElementById("totalAgencies").textContent = totalAgencies > 0 ? totalAgencies : "N/A";
+    const recentAmendedTitleElement = document.getElementById("recentAmendedTitle");
+    if (mostRecentTitle && mostRecentTitleName) {
+        recentAmendedTitleElement.href = `https://www.ecfr.gov/current/title-${mostRecentTitle.replace("Title ", "")}`;
+        recentAmendedTitleElement.textContent = `${mostRecentTitle} - ${mostRecentTitleName}`;
+    } else {
+        recentAmendedTitleElement.textContent = "N/A";
+        recentAmendedTitleElement.removeAttribute("href");
+    }
+    document.getElementById("recentAmendedDate").textContent = mostRecentDate ? `(${mostRecentDate})` : "(N/A)";
+}
 
+// 📌 Populate Table
+async function fetchData() {
+    console.log("📥 Starting data fetch...");
+    const tableBody = document.querySelector("#titlesTable tbody");
+    if (tableBody) tableBody.innerHTML = "";
     try {
-        if (suggestionCache.has(cacheKey)) {
-            return res.json(suggestionCache.get(cacheKey));
+        const [titles, agencies] = await Promise.all([fetchTitles(), fetchAgencies()]);
+        if (!titles.length) {
+            console.error("🚨 No Titles Data Received!");
+            return;
         }
-
-        const params = { query };
-        const response = await axios.get(`${BASE_URL}/api/search/v1/suggestions`, { params });
-
-        suggestionCache.set(cacheKey, response.data);
-        res.json(response.data);
+        let mostRecentTitle = null;
+        let mostRecentTitleName = null;
+        let mostRecentDate = null;
+        titles.forEach(title => {
+            const titleUrl = `https://www.ecfr.gov/current/title-${title.number}`;
+            if (!mostRecentDate || (title.latest_amended_on && title.latest_amended_on > mostRecentDate)) {
+                mostRecentDate = title.latest_amended_on;
+                mostRecentTitle = `Title ${title.number}`;
+                mostRecentTitleName = title.name;
+            }
+            const row = document.createElement("tr");
+            row.innerHTML = `
+                <td><a href="${titleUrl}" target="_blank">Title ${title.number} - ${title.name}</a></td>
+                <td>${title.up_to_date_as_of || "N/A"}</td>
+                <td>${title.latest_amended_on || "N/A"}</td>
+                <td><button onclick="fetchSingleTitleWordCount(${title.number}, this)">Generate</button></td>
+            `;
+            if (tableBody) tableBody.appendChild(row);
+        });
+        updateScoreboard(titles.length, agencies.length, mostRecentTitle, mostRecentDate, mostRecentTitleName);
+        console.log("✅ Table populated successfully.");
     } catch (error) {
-        console.error("🚨 Error in /api/search/suggestions:", error.message);
-        res.status(500).json({ error: "Search suggestions failed" });
+        console.error("🚨 Error in fetchData():", error);
+    }
+}
+
+// 📌 Start Fetching Data on Load
+fetchData();
+
+// ✅ ENHANCED SEARCH FUNCTIONS
+async function performSearch() {
+    const query = document.getElementById("searchQuery").value.trim();
+    const agencyFilter = document.getElementById("agencyFilter").value;
+    const titleFilter = document.getElementById("titleFilter").value;
+    const startDate = document.getElementById("startDate").value;
+    const endDate = document.getElementById("endDate").value;
+    const resultsContainer = document.getElementById("searchResults");
+
+    if (!query) {
+        resultsContainer.innerHTML = "<p>Please enter a search term.</p>";
+        return;
+    }
+
+    console.log(`🔍 Searching for: ${query}`);
+    document.body.classList.add("search-results-visible");
+    resultsContainer.innerHTML = "<p>Loading results...</p>";
+
+    const url = new URL("https://www.ecfr.gov/api/search/v1/results");
+    url.searchParams.append("query", query);
+    if (agencyFilter) url.searchParams.append("agency_slugs[]", agencyFilter);
+    if (titleFilter) url.searchParams.append("title", titleFilter);
+    if (startDate) url.searchParams.append("last_modified_on_or_after", startDate);
+    if (endDate) url.searchParams.append("last_modified_on_or_before", endDate);
+
+    try {
+        const response = await fetch(url.toString());
+        if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+        const data = await response.json();
+        resultsContainer.innerHTML = "";
+        if (!data.results || data.results.length === 0) {
+            resultsContainer.innerHTML = "<p>No results found.</p>";
+        } else {
+            data.results.forEach((result, index) => {
+                const div = document.createElement("div");
+                div.classList.add("search-result");
+                div.innerHTML = `
+                    <p><strong>${index + 1}.</strong> <a href="https://www.ecfr.gov/${result.link}" target="_blank">${result.title || "No title"}</a></p>
+                    <p>${result.description || "No description available."}</p>
+                `;
+                resultsContainer.appendChild(div);
+            });
+        }
+    } catch (error) {
+        console.error("🚨 Error performing search:", error);
+        resultsContainer.innerHTML = "<p>Error retrieving search results.</p>";
+    }
+}
+
+// ✅ REAL-TIME SEARCH SUGGESTIONS
+document.getElementById("searchQuery").addEventListener("input", async function () {
+    const query = this.value.trim();
+    const suggestionBox = document.getElementById("searchSuggestions");
+    if (!query) {
+        suggestionBox.innerHTML = "";
+        suggestionBox.style.display = "none";
+        return;
+    }
+
+    try {
+        const response = await fetch(`https://www.ecfr.gov/api/search/v1/suggestions?query=${encodeURIComponent(query)}`);
+        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+        const data = await response.json();
+        suggestionBox.innerHTML = "";
+        if (data.suggestions && data.suggestions.length > 0) {
+            suggestionBox.style.display = "block";
+            data.suggestions.forEach(s => {
+                const item = document.createElement("div");
+                item.className = "suggestion-item";
+                item.textContent = s;
+                item.onclick = () => {
+                    document.getElementById("searchQuery").value = s;
+                    suggestionBox.innerHTML = "";
+                    suggestionBox.style.display = "none";
+                    performSearch();
+                };
+                suggestionBox.appendChild(item);
+            });
+        } else {
+            suggestionBox.style.display = "none";
+        }
+    } catch (err) {
+        console.error("🚨 Error fetching suggestions:", err);
+        suggestionBox.style.display = "none";
     }
 });
 
-// 📌 Start Server
-app.listen(PORT, () => {
-    console.log(`✅ Server running on port ${PORT}`);
+// ✅ ENTER KEY TO SEARCH
+document.getElementById("searchQuery").addEventListener("keypress", function (event) {
+    if (event.key === "Enter") {
+        event.preventDefault();
+        performSearch();
+    }
 });
