@@ -6,9 +6,10 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 const BASE_URL = "https://www.ecfr.gov";
 
-// ✅ Initialize Cache (Word Counts: 60 days, Metadata: 24 hours)
+// ✅ Initialize Cache (Word Counts: 60 days, Metadata: 24 hours, Search Suggestions: 12 hours)
 const wordCountCache = new NodeCache({ stdTTL: 5184000, checkperiod: 86400 });
-const metadataCache = new NodeCache({ stdTTL: 86400, checkperiod: 3600 }); // Cache metadata for 24 hours
+const metadataCache = new NodeCache({ stdTTL: 86400, checkperiod: 3600 });
+const suggestionCache = new NodeCache({ stdTTL: 43200, checkperiod: 3600 });
 
 // 📌 ✅ CORS Middleware - Allows frontend access
 app.use((req, res, next) => {
@@ -26,8 +27,6 @@ app.get("/api/titles", async (req, res) => {
         if (!cachedTitles) {
             console.log("📥 Fetching eCFR Titles (Not in cache)...");
             const response = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
-
-            // 🏪 Store only necessary metadata (Title number + issue date)
             cachedTitles = response.data.titles.map(t => ({
                 number: t.number,
                 name: t.name,
@@ -35,8 +34,7 @@ app.get("/api/titles", async (req, res) => {
                 latest_amended_on: t.latest_amended_on,
                 up_to_date_as_of: t.up_to_date_as_of
             }));
-
-            metadataCache.set("titlesMetadata", cachedTitles); // ✅ Cache for 24 hours
+            metadataCache.set("titlesMetadata", cachedTitles);
         } else {
             console.log("✅ Using cached Titles Metadata...");
         }
@@ -48,7 +46,7 @@ app.get("/api/titles", async (req, res) => {
     }
 });
 
-// 📌 Fetch Agencies (No Change)
+// 📌 Fetch Agencies
 app.get("/api/agencies", async (req, res) => {
     try {
         console.log("📥 Fetching agency data...");
@@ -60,11 +58,9 @@ app.get("/api/agencies", async (req, res) => {
     }
 });
 
-// 📌 Fetch Word Count for a Single Title (cached & optimized)
+// 📌 Fetch Word Count for a Single Title
 app.get("/api/wordcount/:titleNumber", async (req, res) => {
     const titleNumber = req.params.titleNumber;
-
-    // ✅ Check Cache First
     let cachedWordCount = wordCountCache.get(`wordCount-${titleNumber}`);
     if (cachedWordCount !== undefined) {
         console.log(`✅ Returning cached word count for Title ${titleNumber}`);
@@ -73,51 +69,29 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
 
     try {
         console.log(`📥 Fetching word count for Title ${titleNumber}...`);
-
-        // 🔍 Use Cached Title Metadata
         let cachedTitlesMetadata = metadataCache.get("titlesMetadata");
 
         if (!cachedTitlesMetadata) {
-            console.log("📥 Titles Metadata Not in Cache - Fetching...");
             const titlesResponse = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
-
             cachedTitlesMetadata = titlesResponse.data.titles.map(t => ({
                 number: t.number,
                 name: t.name,
                 latest_issue_date: t.latest_issue_date
             }));
-
-            metadataCache.set("titlesMetadata", cachedTitlesMetadata, 86400);
+            metadataCache.set("titlesMetadata", cachedTitlesMetadata);
         }
 
-        // 🔍 Find the Title’s issue date
         const titleData = cachedTitlesMetadata.find(t => t.number.toString() === titleNumber);
-
-        if (!titleData) {
-            console.warn(`⚠️ Title ${titleNumber} not found`);
-            return res.status(404).json({ error: "Title not found" });
-        }
-
-        if (titleData.name === "Reserved") {
-            console.log(`⚠️ Title ${titleNumber} is Reserved (Empty). Returning 0 words.`);
-            return res.json({ title: titleNumber, wordCount: 0 });
-        }
+        if (!titleData) return res.status(404).json({ error: "Title not found" });
+        if (titleData.name === "Reserved") return res.json({ title: titleNumber, wordCount: 0 });
 
         const issueDate = titleData.latest_issue_date;
-        console.log(`📥 Processing Title ${titleNumber} (Issued: ${issueDate})...`);
-
-        // 🔄 Fetch XML Content (Handles Large Data Efficiently)
         const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${issueDate}/title-${titleNumber}.xml`;
         const wordCount = await streamAndCountWords(xmlUrl);
 
-        if (wordCount === null) {
-            return res.status(500).json({ error: "Failed to fetch XML data" });
-        }
+        if (wordCount === null) return res.status(500).json({ error: "Failed to fetch XML data" });
 
-        // ✅ Cache Result
         wordCountCache.set(`wordCount-${titleNumber}`, wordCount);
-
-        console.log(`📊 Word Count for Title ${titleNumber}: ${wordCount}`);
         res.json({ title: titleNumber, wordCount });
     } catch (error) {
         console.error(`🚨 Error processing Title ${titleNumber}:`, error.message);
@@ -125,14 +99,14 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
     }
 });
 
-// 📌 Efficiently Fetch and Stream-Process XML Data
+// 📌 Efficient Stream Word Count
 async function streamAndCountWords(url) {
     try {
         const response = await axios({
             method: "GET",
             url,
-            responseType: "stream", // ✅ Stream Data Instead of Full Load
-            timeout: 60000 // ✅ Increased timeout to prevent disconnects
+            responseType: "stream",
+            timeout: 60000
         });
 
         let wordCount = 0;
@@ -141,13 +115,13 @@ async function streamAndCountWords(url) {
         return new Promise((resolve, reject) => {
             response.data.on("data", chunk => {
                 buffer += chunk.toString();
-                let words = buffer.split(/\s+/);
-                wordCount += words.length - 1; // Process all but the last incomplete word
-                buffer = words.pop(); // Keep last word in buffer (it might be incomplete)
+                const words = buffer.split(/\s+/);
+                wordCount += words.length - 1;
+                buffer = words.pop();
             });
 
             response.data.on("end", () => {
-                if (buffer.length > 0) wordCount++; // Add final word if any remains
+                if (buffer.length > 0) wordCount++;
                 resolve(wordCount);
             });
 
@@ -159,7 +133,52 @@ async function streamAndCountWords(url) {
     }
 }
 
-// 📌 Start the Server
+// ✅ 🔍 SEARCH API: /api/search
+app.get("/api/search", async (req, res) => {
+    try {
+        const params = { ...req.query };
+        const response = await axios.get(`${BASE_URL}/api/search/v1/results`, { params });
+        res.json(response.data);
+    } catch (error) {
+        console.error("🚨 Error in /api/search:", error.message);
+        res.status(500).json({ error: "Search failed" });
+    }
+});
+
+// ✅ 🔍 SEARCH COUNT API: /api/search/count
+app.get("/api/search/count", async (req, res) => {
+    try {
+        const params = { ...req.query };
+        const response = await axios.get(`${BASE_URL}/api/search/v1/count`, { params });
+        res.json(response.data);
+    } catch (error) {
+        console.error("🚨 Error in /api/search/count:", error.message);
+        res.status(500).json({ error: "Search count failed" });
+    }
+});
+
+// ✅ 🔍 SEARCH SUGGESTIONS API: /api/search/suggestions
+app.get("/api/search/suggestions", async (req, res) => {
+    const query = req.query.query || "";
+    const cacheKey = `suggestions-${query.toLowerCase()}`;
+
+    try {
+        if (suggestionCache.has(cacheKey)) {
+            return res.json(suggestionCache.get(cacheKey));
+        }
+
+        const params = { query };
+        const response = await axios.get(`${BASE_URL}/api/search/v1/suggestions`, { params });
+
+        suggestionCache.set(cacheKey, response.data);
+        res.json(response.data);
+    } catch (error) {
+        console.error("🚨 Error in /api/search/suggestions:", error.message);
+        res.status(500).json({ error: "Search suggestions failed" });
+    }
+});
+
+// 📌 Start Server
 app.listen(PORT, () => {
     console.log(`✅ Server running on port ${PORT}`);
 });
