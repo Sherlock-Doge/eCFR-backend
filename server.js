@@ -96,7 +96,7 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
     }
 });
 
-// ✅ Word Count by Agency
+// ✅ Word Count by Agency (Strict Match)
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
     const slug = req.params.slug;
     const agencies = metadataCache.get("agenciesMetadata") || [];
@@ -132,7 +132,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
             }
 
             console.log(`📦 Parsing Title ${titleNumber} for Agency '${agency.name}' → Targets: [${targets.join(", ")}]`);
-            const words = await countAgencyRelevantWords(xmlUrl, targets);
+            const words = await countAgencyRelevantWords(xmlUrl, targets, slug);
             console.log(`🔢 Final word count for Title ${titleNumber}: ${words}`);
             wordCountCache.set(cacheKey, words);
             total += words;
@@ -172,22 +172,26 @@ async function streamAndCountWords(url) {
     }
 }
 
-// ✅ Filtered SAX Word Count for Agency
-async function countAgencyRelevantWords(url, targets = []) {
+// ✅ Filtered Word Count using CHAPTER/PART tag N attribute with FULL LOGGING
+async function countAgencyRelevantWords(url, targets = [], agencySlug = "") {
     return new Promise(async (resolve, reject) => {
         try {
             const response = await axios({ method: "GET", url, responseType: "stream", timeout: 60000 });
             const parser = sax.createStream(true);
             let wordCount = 0;
             let capture = false;
+            let tagStack = [];
 
             parser.on("opentag", node => {
+                tagStack.push(node.name);
                 if ((node.name === "CHAPTER" || node.name === "PART") && node.attributes) {
-                    const rawId = (node.attributes.N || "").toString().trim().toUpperCase();
-                    const normalizedId = romanToArabic(rawId);
-                    const match = targets.includes(rawId) || targets.includes(normalizedId);
-                    console.log(`📘 XML NODE FOUND → Type: ${node.name}, N: '${rawId}', Normalized: '${normalizedId}', MATCH? ${match}`);
-                    capture = match;
+                    const id = (node.attributes.N || "").toString().trim();
+                    const matched = targets.includes(id);
+                    capture = matched;
+
+                    // ✅ BONUS DEBUG LOG
+                    console.log(`📘 ${agencySlug} OPEN TAG: ${node.name} | N=${id} | Match=${matched}`);
+                    console.log(`📦 Attributes for ${node.name}:`, node.attributes);
                 }
             });
 
@@ -196,11 +200,12 @@ async function countAgencyRelevantWords(url, targets = []) {
                     const words = text.trim().split(/\s+/);
                     const count = words.filter(Boolean).length;
                     wordCount += count;
-                    console.log(`📝 Captured Text: "${text.trim()}" | Words: ${count}`);
+                    console.log(`📝 Captured (${tagStack[tagStack.length - 1]}): ${count} words`);
                 }
             });
 
             parser.on("closetag", name => {
+                tagStack.pop();
                 if (name === "CHAPTER" || name === "PART") capture = false;
             });
 
@@ -220,19 +225,6 @@ async function countAgencyRelevantWords(url, targets = []) {
             reject(e);
         }
     });
-}
-
-// ✅ Roman to Arabic conversion utility
-function romanToArabic(roman) {
-    const map = {I:1, V:5, X:10, L:50, C:100, D:500, M:1000};
-    let num = 0, prev = 0;
-    for (let i = roman.length - 1; i >= 0; i--) {
-        const curr = map[roman[i]] || 0;
-        if (curr < prev) num -= curr;
-        else num += curr;
-        prev = curr;
-    }
-    return num.toString();
 }
 
 // ✅ Search
