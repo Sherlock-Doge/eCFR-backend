@@ -20,19 +20,6 @@ app.use((req, res, next) => {
     next();
 });
 
-// ✅ Utility: Normalize Roman numerals → Arabic numerals (bonus tip: helps match CHAPTER IDs like "VIII" → 8)
-function romanToArabic(roman) {
-    const map = { I: 1, V: 5, X: 10, L: 50, C: 100 };
-    let total = 0, prev = 0;
-    for (let i = roman.length - 1; i >= 0; i--) {
-        const val = map[roman[i]];
-        if (!val) return roman; // Not a valid Roman numeral
-        total += val < prev ? -val : val;
-        prev = val;
-    }
-    return total.toString();
-}
-
 // ✅ Titles Endpoint
 app.get("/api/titles", async (req, res) => {
     try {
@@ -109,7 +96,7 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
     }
 });
 
-// ✅ Word Count by Agency (Strict + Normalized Match)
+// ✅ Word Count by Agency
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
     const slug = req.params.slug;
     const agencies = metadataCache.get("agenciesMetadata") || [];
@@ -128,10 +115,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
         const titleGroups = {};
         refs.forEach(r => {
             if (!titleGroups[r.title]) titleGroups[r.title] = [];
-            const raw = (r.chapter || r.part || "").toString().trim();
-            const normalized = romanToArabic(raw);
-            console.log(`Converted ${raw} to ${normalized}`);
-            titleGroups[r.title].push(normalized);
+            titleGroups[r.title].push((r.chapter || r.part || "").toString().trim());
         });
 
         for (const [titleNumber, targets] of Object.entries(titleGroups)) {
@@ -148,8 +132,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
             }
 
             console.log(`📦 Parsing Title ${titleNumber} for Agency '${agency.name}' → Targets: [${targets.join(", ")}]`);
-            const normalizedTargets = targets.map(t => t.toString().trim().toUpperCase());
-            const words = await countAgencyRelevantWords(xmlUrl, normalizedTargets);
+            const words = await countAgencyRelevantWords(xmlUrl, targets);
             console.log(`🔢 Final word count for Title ${titleNumber}: ${words}`);
             wordCountCache.set(cacheKey, words);
             total += words;
@@ -189,7 +172,7 @@ async function streamAndCountWords(url) {
     }
 }
 
-// ✅ Filtered Word Count (CHAPTER/PART strict match with bonus debug logs)
+// ✅ Filtered SAX Word Count for Agency
 async function countAgencyRelevantWords(url, targets = []) {
     return new Promise(async (resolve, reject) => {
         try {
@@ -202,16 +185,18 @@ async function countAgencyRelevantWords(url, targets = []) {
                 if ((node.name === "CHAPTER" || node.name === "PART") && node.attributes) {
                     const rawId = (node.attributes.N || "").toString().trim().toUpperCase();
                     const normalizedId = romanToArabic(rawId);
-                    capture = targets.includes(rawId) || targets.includes(normalizedId);
-                    console.log(`📘 OPEN TAG ${node.name} - Raw N: ${rawId}, Normalized: ${normalizedId} → Match: ${capture}`);
+                    const match = targets.includes(rawId) || targets.includes(normalizedId);
+                    console.log(`📘 XML NODE FOUND → Type: ${node.name}, N: '${rawId}', Normalized: '${normalizedId}', MATCH? ${match}`);
+                    capture = match;
                 }
             });
 
             parser.on("text", text => {
                 if (capture) {
                     const words = text.trim().split(/\s+/);
-                    wordCount += words.filter(Boolean).length;
-                    console.log(`📝 Captured Text: "${text.trim()}" → +${words.filter(Boolean).length}`);
+                    const count = words.filter(Boolean).length;
+                    wordCount += count;
+                    console.log(`📝 Captured Text: "${text.trim()}" | Words: ${count}`);
                 }
             });
 
@@ -220,7 +205,7 @@ async function countAgencyRelevantWords(url, targets = []) {
             });
 
             parser.on("end", () => {
-                console.log(`✅ Final filtered stream word count: ${wordCount}`);
+                console.log(`✅ Final stream word count: ${wordCount}`);
                 resolve(wordCount);
             });
 
@@ -235,6 +220,19 @@ async function countAgencyRelevantWords(url, targets = []) {
             reject(e);
         }
     });
+}
+
+// ✅ Roman to Arabic conversion utility
+function romanToArabic(roman) {
+    const map = {I:1, V:5, X:10, L:50, C:100, D:500, M:1000};
+    let num = 0, prev = 0;
+    for (let i = roman.length - 1; i >= 0; i--) {
+        const curr = map[roman[i]] || 0;
+        if (curr < prev) num -= curr;
+        else num += curr;
+        prev = curr;
+    }
+    return num.toString();
 }
 
 // ✅ Search
