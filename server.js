@@ -128,8 +128,10 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
         const titleGroups = {};
         refs.forEach(r => {
             if (!titleGroups[r.title]) titleGroups[r.title] = [];
-            const ref = (r.chapter || r.part || "").toString().trim();
-            titleGroups[r.title].push(ref);
+            const raw = (r.chapter || r.part || "").toString().trim();
+            const normalized = romanToArabic(raw);
+            console.log(`Converted ${raw} to ${normalized}`);
+            titleGroups[r.title].push(normalized);
         });
 
         for (const [titleNumber, targets] of Object.entries(titleGroups)) {
