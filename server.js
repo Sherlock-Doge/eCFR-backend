@@ -1,19 +1,19 @@
-// eCFR Analyzer Backend – Final Structure-Aware Version
+// eCFR Analyzer Backend – Real HTML Scrape Word Count by Agency (Final Version)
 const express = require("express");
 const axios = require("axios");
 const NodeCache = require("node-cache");
-const sax = require("sax");
+const { JSDOM } = require("jsdom");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 const BASE_URL = "https://www.ecfr.gov";
 
-// ✅ Caches
+// Caches
 const wordCountCache = new NodeCache({ stdTTL: 5184000, checkperiod: 86400 });
 const metadataCache = new NodeCache({ stdTTL: 86400, checkperiod: 3600 });
 const suggestionCache = new NodeCache({ stdTTL: 43200, checkperiod: 3600 });
 
-// ✅ Middleware
+// Middleware
 app.use((req, res, next) => {
     res.header("Access-Control-Allow-Origin", "*");
     res.header("Access-Control-Allow-Methods", "GET, OPTIONS");
@@ -21,7 +21,7 @@ app.use((req, res, next) => {
     next();
 });
 
-// ✅ Titles Endpoint
+// Titles Endpoint
 app.get("/api/titles", async (req, res) => {
     try {
         let cachedTitles = metadataCache.get("titlesMetadata");
@@ -46,7 +46,7 @@ app.get("/api/titles", async (req, res) => {
     }
 });
 
-// ✅ Agencies Endpoint
+// Agencies Endpoint
 app.get("/api/agencies", async (req, res) => {
     try {
         console.log("📥 Fetching agency data...");
@@ -60,7 +60,7 @@ app.get("/api/agencies", async (req, res) => {
     }
 });
 
-// ✅ Word Count by Title
+// Word Count by Title (XML Stream)
 app.get("/api/wordcount/:titleNumber", async (req, res) => {
     const titleNumber = req.params.titleNumber;
     const cacheKey = `wordCount-${titleNumber}`;
@@ -97,12 +97,10 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
     }
 });
 
-// ✅ Word Count by Agency (Structure-Aware)
+// Word Count by Agency (HTML scrape)
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
     const slug = req.params.slug;
     const agencies = metadataCache.get("agenciesMetadata") || [];
-    const titles = metadataCache.get("titlesMetadata") || [];
-
     const agency = agencies.find(a =>
         a.slug === slug || a.name.toLowerCase().replace(/\s+/g, "-") === slug
     );
@@ -111,57 +109,44 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
     const refs = agency.cfr_references || [];
     if (!refs.length) return res.json({ agency: agency.name, wordCount: 0 });
 
-    let total = 0;
+    let totalWords = 0;
     try {
-        const titleGroups = {};
-        refs.forEach(ref => {
-            if (!titleGroups[ref.title]) titleGroups[ref.title] = [];
-            titleGroups[ref.title].push((ref.chapter || ref.part || "").toString().trim());
-        });
-
-        for (const [titleNumber, targets] of Object.entries(titleGroups)) {
-            const titleMeta = titles.find(t => t.number == titleNumber);
-            if (!titleMeta || titleMeta.name === "Reserved") continue;
-
-            const cacheKey = `agency-${slug}-title-${titleNumber}`;
-            let cached = wordCountCache.get(cacheKey);
+        for (const ref of refs) {
+            const title = ref.title;
+            const chapter = ref.chapter || ref.part || "";
+            const cacheKey = `html-agency-${slug}-title-${title}-chapter-${chapter}`;
+            const cached = wordCountCache.get(cacheKey);
             if (cached !== undefined) {
-                console.log(`✅ Cache hit: Agency ${slug} Title ${titleNumber}`);
-                total += cached;
+                console.log(`✅ Cache hit: ${cacheKey}`);
+                totalWords += cached;
                 continue;
             }
 
-            const structureUrl = `${BASE_URL}/api/versioner/v1/structure/${titleMeta.latest_issue_date}/title-${titleNumber}.json`;
-            const structureRes = await axios.get(structureUrl);
-            const pathsToMatch = [];
-
-            function traverse(node, currentPath = []) {
-                const newPath = [...currentPath, node];
-                if (node?.identifier && targets.includes(node.identifier)) {
-                    pathsToMatch.push(newPath.map(n => n.identifier));
-                }
-                if (node.children && node.children.length) {
-                    node.children.forEach(child => traverse(child, newPath));
-                }
+            // Construct ecfr.gov URL
+            const url = `${BASE_URL}/current/title-${title}/chapter-${chapter}`;
+            console.log(`🌐 Scraping HTML from ${url}`);
+            try {
+                const response = await axios.get(url, { timeout: 30000 });
+                const dom = new JSDOM(response.data);
+                const textContent = dom.window.document.body.textContent || "";
+                const words = textContent.trim().split(/\s+/).filter(Boolean).length;
+                wordCountCache.set(cacheKey, words);
+                totalWords += words;
+                console.log(`📊 Words counted: ${words}`);
+            } catch (err) {
+                console.warn(`⚠️ Failed to scrape: ${url} – Skipping`);
+                continue;
             }
-
-            structureRes.data.children.forEach(child => traverse(child));
-
-            const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${titleMeta.latest_issue_date}/title-${titleNumber}.xml`;
-            const wordCount = await countWordsByStructurePath(xmlUrl, pathsToMatch);
-            console.log(`🔢 Final agency stream word count: ${wordCount}`);
-            wordCountCache.set(cacheKey, wordCount);
-            total += wordCount;
         }
 
-        res.json({ agency: agency.name, wordCount: total });
+        res.json({ agency: agency.name, wordCount: totalWords });
     } catch (e) {
-        console.error("🚨 Agency Word Count Error:", e.message);
+        console.error("🚨 HTML Agency Word Count Error:", e.message);
         res.status(500).json({ error: "Failed to calculate agency word count" });
     }
 });
 
-// ✅ Generic Streaming Word Count
+// Generic Stream XML Word Count
 async function streamAndCountWords(url) {
     try {
         const response = await axios({ method: "GET", url, responseType: "stream", timeout: 60000 });
@@ -188,49 +173,7 @@ async function streamAndCountWords(url) {
     }
 }
 
-// ✅ Structure-Aware Filtered Stream Word Count
-async function countWordsByStructurePath(url, targetPaths) {
-    return new Promise(async (resolve, reject) => {
-        try {
-            const response = await axios({ method: "GET", url, responseType: "stream", timeout: 60000 });
-            const parser = sax.createStream(true);
-            let pathStack = [];
-            let capture = false;
-            let wordCount = 0;
-
-            parser.on("opentag", node => {
-                const id = node.attributes?.identifier || "";
-                pathStack.push(id);
-                const currentPath = [...pathStack];
-                capture = targetPaths.some(tp => currentPath.join("/").startsWith(tp.join("/")));
-            });
-
-            parser.on("text", text => {
-                if (capture) {
-                    const words = text.trim().split(/\s+/).filter(Boolean);
-                    wordCount += words.length;
-                }
-            });
-
-            parser.on("closetag", () => {
-                pathStack.pop();
-            });
-
-            parser.on("end", () => resolve(wordCount));
-            parser.on("error", err => {
-                console.error("🚨 SAX error:", err.message);
-                reject(err);
-            });
-
-            response.data.pipe(parser);
-        } catch (e) {
-            console.error("🚨 Error during structured stream:", e.message);
-            reject(e);
-        }
-    });
-}
-
-// ✅ Search
+// Search
 app.get("/api/search", async (req, res) => {
     try {
         const response = await axios.get(`${BASE_URL}/api/search/v1/results`, { params: req.query });
@@ -241,7 +184,7 @@ app.get("/api/search", async (req, res) => {
     }
 });
 
-// ✅ Search Count
+// Search Count
 app.get("/api/search/count", async (req, res) => {
     try {
         const response = await axios.get(`${BASE_URL}/api/search/v1/count`, { params: req.query });
@@ -252,7 +195,7 @@ app.get("/api/search/count", async (req, res) => {
     }
 });
 
-// ✅ Suggestions
+// Suggestions
 app.get("/api/search/suggestions", async (req, res) => {
     const query = (req.query.query || "").toLowerCase().trim();
     if (!query) return res.json({ suggestions: [] });
@@ -281,7 +224,7 @@ app.get("/api/search/suggestions", async (req, res) => {
     }
 });
 
-// ✅ Metadata Preload
+// Metadata Preload
 (async function preloadMetadata() {
     try {
         const titlesRes = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
@@ -303,7 +246,7 @@ app.get("/api/search/suggestions", async (req, res) => {
     }
 })();
 
-// ✅ Start Server
+// Start Server
 app.listen(PORT, () => {
     console.log(`🚀 eCFR Analyzer server running on port ${PORT}`);
 });
