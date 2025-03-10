@@ -94,6 +94,7 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
     }
 });
 
+// ✅ Word Counter
 async function streamAndCountWords(url) {
     try {
         const response = await axios({ method: "GET", url, responseType: "stream", timeout: 60000 });
@@ -158,21 +159,18 @@ app.get("/api/search/suggestions", async (req, res) => {
 
         let suggestions = [];
 
-        // Match titles
         titles.forEach(t => {
             if (t.name.toLowerCase().includes(query)) {
                 suggestions.push(`Title ${t.number}: ${t.name}`);
             }
         });
 
-        // Match agencies
         agencies.forEach(a => {
             if (a.name.toLowerCase().includes(query)) {
                 suggestions.push(a.name);
             }
         });
 
-        // Dedup + Limit
         suggestions = [...new Set(suggestions)].slice(0, 10);
         suggestionCache.set(cacheKey, suggestions);
         res.json({ suggestions });
@@ -182,7 +180,7 @@ app.get("/api/search/suggestions", async (req, res) => {
     }
 });
 
-// ✅ NEW: Relational Filtering Map
+// ✅ Relational Filtering API
 const agencyTitleMap = {
     "Department of Agriculture": [2, 5, 7, 48],
     "Department of Homeland Security": [6],
@@ -193,15 +191,14 @@ const agencyTitleMap = {
     "Department of the Interior": [50],
     "Department of Commerce": [15],
     "Department of Justice": [28],
-    "Department of State": [22],
-    // Add more mappings as needed
+    "Department of State": [22]
 };
 
 app.get("/api/agency-title-map", (req, res) => {
     res.json({ map: agencyTitleMap });
 });
 
-// ✅ Preload metadata into cache
+// ✅ Preload metadata
 (async function preloadMetadata() {
     try {
         const titlesRes = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
@@ -222,7 +219,7 @@ app.get("/api/agency-title-map", (req, res) => {
     }
 })();
 
-// ✅ Start
+// ✅ Start server
 app.listen(PORT, () => {
     console.log(`✅ Server running on port ${PORT}`);
 });
