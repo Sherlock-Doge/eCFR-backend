@@ -1,4 +1,4 @@
-// eCFR Analyzer Backend – Final Full Version
+// eCFR Analyzer Backend – Final Structure-Aware Version
 const express = require("express");
 const axios = require("axios");
 const NodeCache = require("node-cache");
@@ -97,7 +97,7 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
     }
 });
 
-// ✅ Word Count by Agency – Matching CHAPTER/PART by ID, then capturing all internal text
+// ✅ Word Count by Agency (Structure-Aware)
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
     const slug = req.params.slug;
     const agencies = metadataCache.get("agenciesMetadata") || [];
@@ -123,7 +123,6 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
             const titleMeta = titles.find(t => t.number == titleNumber);
             if (!titleMeta || titleMeta.name === "Reserved") continue;
 
-            const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${titleMeta.latest_issue_date}/title-${titleNumber}.xml`;
             const cacheKey = `agency-${slug}-title-${titleNumber}`;
             let cached = wordCountCache.get(cacheKey);
             if (cached !== undefined) {
@@ -132,11 +131,27 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
                 continue;
             }
 
-            console.log(`📦 Parsing Title ${titleNumber} for Agency '${agency.name}' → Targets: [${targets.join(", ")}]`);
-            const words = await countAgencyRelevantWords(xmlUrl, targets);
-            console.log(`🔢 Final word count for Title ${titleNumber}: ${words}`);
-            wordCountCache.set(cacheKey, words);
-            total += words;
+            const structureUrl = `${BASE_URL}/api/versioner/v1/structure/${titleMeta.latest_issue_date}/title-${titleNumber}.json`;
+            const structureRes = await axios.get(structureUrl);
+            const pathsToMatch = [];
+
+            function traverse(node, currentPath = []) {
+                const newPath = [...currentPath, node];
+                if (node?.identifier && targets.includes(node.identifier)) {
+                    pathsToMatch.push(newPath.map(n => n.identifier));
+                }
+                if (node.children && node.children.length) {
+                    node.children.forEach(child => traverse(child, newPath));
+                }
+            }
+
+            structureRes.data.children.forEach(child => traverse(child));
+
+            const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${titleMeta.latest_issue_date}/title-${titleNumber}.xml`;
+            const wordCount = await countWordsByStructurePath(xmlUrl, pathsToMatch);
+            console.log(`🔢 Final agency stream word count: ${wordCount}`);
+            wordCountCache.set(cacheKey, wordCount);
+            total += wordCount;
         }
 
         res.json({ agency: agency.name, wordCount: total });
@@ -169,52 +184,39 @@ async function streamAndCountWords(url) {
         });
     } catch (e) {
         console.error("🚨 Stream error:", e.message);
-        return null;
+        return 0;
     }
 }
 
-// ✅ Filtered Word Count using CHAPTER/PART hierarchical capture
-async function countAgencyRelevantWords(url, targets = []) {
+// ✅ Structure-Aware Filtered Stream Word Count
+async function countWordsByStructurePath(url, targetPaths) {
     return new Promise(async (resolve, reject) => {
         try {
             const response = await axios({ method: "GET", url, responseType: "stream", timeout: 60000 });
             const parser = sax.createStream(true);
+            let pathStack = [];
+            let capture = false;
             let wordCount = 0;
-            let captureDepth = 0;
-            let insideTarget = false;
 
             parser.on("opentag", node => {
-                if ((node.name === "CHAPTER" || node.name === "PART") && node.attributes?.N) {
-                    const id = node.attributes.N.toString().trim();
-                    insideTarget = targets.includes(id);
-                    captureDepth = insideTarget ? 1 : 0;
-                    console.log(`📘 OPEN TAG ${node.name} → ID: ${id} → insideTarget: ${insideTarget}`);
-                } else if (insideTarget) {
-                    captureDepth++;
-                }
+                const id = node.attributes?.identifier || "";
+                pathStack.push(id);
+                const currentPath = [...pathStack];
+                capture = targetPaths.some(tp => currentPath.join("/").startsWith(tp.join("/")));
             });
 
             parser.on("text", text => {
-                if (insideTarget && captureDepth > 0) {
-                    const words = text.trim().split(/\s+/);
-                    const count = words.filter(Boolean).length;
-                    wordCount += count;
-                    console.log(`📝 Captured Text: "${text.trim()}" → +${count}`);
+                if (capture) {
+                    const words = text.trim().split(/\s+/).filter(Boolean);
+                    wordCount += words.length;
                 }
             });
 
-            parser.on("closetag", name => {
-                if (insideTarget) {
-                    captureDepth--;
-                    if (captureDepth === 0) insideTarget = false;
-                }
+            parser.on("closetag", () => {
+                pathStack.pop();
             });
 
-            parser.on("end", () => {
-                console.log(`✅ Final agency stream word count: ${wordCount}`);
-                resolve(wordCount);
-            });
-
+            parser.on("end", () => resolve(wordCount));
             parser.on("error", err => {
                 console.error("🚨 SAX error:", err.message);
                 reject(err);
@@ -222,7 +224,7 @@ async function countAgencyRelevantWords(url, targets = []) {
 
             response.data.pipe(parser);
         } catch (e) {
-            console.error("🚨 Filtered stream error:", e.message);
+            console.error("🚨 Error during structured stream:", e.message);
             reject(e);
         }
     });
@@ -256,7 +258,7 @@ app.get("/api/search/suggestions", async (req, res) => {
     if (!query) return res.json({ suggestions: [] });
 
     try {
-        const cacheKey = `custom-suggestions-${query}`;
+        const cacheKey = `suggestions-${query}`;
         if (suggestionCache.has(cacheKey)) return res.json({ suggestions: suggestionCache.get(cacheKey) });
 
         const titles = metadataCache.get("titlesMetadata") || [];
