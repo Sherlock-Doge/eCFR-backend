@@ -1,3 +1,4 @@
+// eCFR Analyzer Backend – Final Full Version
 const express = require("express");
 const axios = require("axios");
 const NodeCache = require("node-cache");
@@ -96,7 +97,7 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
     }
 });
 
-// ✅ Word Count by Agency (Strict Match)
+// ✅ Word Count by Agency – Matching CHAPTER/PART by ID, then capturing all internal text
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
     const slug = req.params.slug;
     const agencies = metadataCache.get("agenciesMetadata") || [];
@@ -113,9 +114,9 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
     let total = 0;
     try {
         const titleGroups = {};
-        refs.forEach(r => {
-            if (!titleGroups[r.title]) titleGroups[r.title] = [];
-            titleGroups[r.title].push((r.chapter || r.part || "").toString().trim());
+        refs.forEach(ref => {
+            if (!titleGroups[ref.title]) titleGroups[ref.title] = [];
+            titleGroups[ref.title].push((ref.chapter || ref.part || "").toString().trim());
         });
 
         for (const [titleNumber, targets] of Object.entries(titleGroups)) {
@@ -132,7 +133,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
             }
 
             console.log(`📦 Parsing Title ${titleNumber} for Agency '${agency.name}' → Targets: [${targets.join(", ")}]`);
-            const words = await countAgencyRelevantWords(xmlUrl, targets, slug);
+            const words = await countAgencyRelevantWords(xmlUrl, targets);
             console.log(`🔢 Final word count for Title ${titleNumber}: ${words}`);
             wordCountCache.set(cacheKey, words);
             total += words;
@@ -145,7 +146,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
     }
 });
 
-// ✅ Full Title Streaming Word Count
+// ✅ Generic Streaming Word Count
 async function streamAndCountWords(url) {
     try {
         const response = await axios({ method: "GET", url, responseType: "stream", timeout: 60000 });
@@ -172,45 +173,45 @@ async function streamAndCountWords(url) {
     }
 }
 
-// ✅ Filtered Word Count using CHAPTER/PART tag N attribute with FULL LOGGING
-async function countAgencyRelevantWords(url, targets = [], agencySlug = "") {
+// ✅ Filtered Word Count using CHAPTER/PART hierarchical capture
+async function countAgencyRelevantWords(url, targets = []) {
     return new Promise(async (resolve, reject) => {
         try {
             const response = await axios({ method: "GET", url, responseType: "stream", timeout: 60000 });
             const parser = sax.createStream(true);
             let wordCount = 0;
-            let capture = false;
-            let tagStack = [];
+            let captureDepth = 0;
+            let insideTarget = false;
 
             parser.on("opentag", node => {
-                tagStack.push(node.name);
-                if ((node.name === "CHAPTER" || node.name === "PART") && node.attributes) {
-                    const id = (node.attributes.N || "").toString().trim();
-                    const matched = targets.includes(id);
-                    capture = matched;
-
-                    // ✅ BONUS DEBUG LOG
-                    console.log(`📘 ${agencySlug} OPEN TAG: ${node.name} | N=${id} | Match=${matched}`);
-                    console.log(`📦 Attributes for ${node.name}:`, node.attributes);
+                if ((node.name === "CHAPTER" || node.name === "PART") && node.attributes?.N) {
+                    const id = node.attributes.N.toString().trim();
+                    insideTarget = targets.includes(id);
+                    captureDepth = insideTarget ? 1 : 0;
+                    console.log(`📘 OPEN TAG ${node.name} → ID: ${id} → insideTarget: ${insideTarget}`);
+                } else if (insideTarget) {
+                    captureDepth++;
                 }
             });
 
             parser.on("text", text => {
-                if (capture) {
+                if (insideTarget && captureDepth > 0) {
                     const words = text.trim().split(/\s+/);
                     const count = words.filter(Boolean).length;
                     wordCount += count;
-                    console.log(`📝 Captured (${tagStack[tagStack.length - 1]}): ${count} words`);
+                    console.log(`📝 Captured Text: "${text.trim()}" → +${count}`);
                 }
             });
 
             parser.on("closetag", name => {
-                tagStack.pop();
-                if (name === "CHAPTER" || name === "PART") capture = false;
+                if (insideTarget) {
+                    captureDepth--;
+                    if (captureDepth === 0) insideTarget = false;
+                }
             });
 
             parser.on("end", () => {
-                console.log(`✅ Final stream word count: ${wordCount}`);
+                console.log(`✅ Final agency stream word count: ${wordCount}`);
                 resolve(wordCount);
             });
 
