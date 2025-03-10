@@ -193,6 +193,7 @@ async function countAgencyRelevantWords(url, targets = []) {
                 if (capture) {
                     const words = text.trim().split(/\s+/);
                     wordCount += words.filter(Boolean).length;
+                    console.log(`📝 Captured Text: ${text.trim()} | Words Counted: ${words.filter(Boolean).length}`);
                 }
             });
 
