@@ -20,6 +20,18 @@ app.use((req, res, next) => {
     next();
 });
 
+// ✅ Roman Numeral → Arabic Conversion (for CHAPTER/PART matching)
+function romanToArabic(roman) {
+    const map = {I:1,V:5,X:10,L:50,C:100,D:500,M:1000};
+    let total = 0, prev = 0;
+    roman.toUpperCase().split('').reverse().forEach(r => {
+        const curr = map[r] || 0;
+        total += curr < prev ? -curr : curr;
+        prev = curr;
+    });
+    return total.toString();
+}
+
 // ✅ Titles Endpoint
 app.get("/api/titles", async (req, res) => {
     try {
@@ -96,7 +108,7 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
     }
 });
 
-// ✅ Word Count by Agency (Strict Match)
+// ✅ Word Count by Agency (FINAL FIXED VERSION with Roman-to-Arabic normalization)
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
     const slug = req.params.slug;
     const agencies = metadataCache.get("agenciesMetadata") || [];
@@ -115,7 +127,9 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
         const titleGroups = {};
         refs.forEach(r => {
             if (!titleGroups[r.title]) titleGroups[r.title] = [];
-            titleGroups[r.title].push((r.chapter || r.part || "").toString().trim());
+            const raw = (r.chapter || r.part || "").toString().trim();
+            const normalized = romanToArabic(raw); // 🛠 FIX: Normalize CFR ref like "LXXI" → "71"
+            titleGroups[r.title].push(normalized);
         });
 
         for (const [titleNumber, targets] of Object.entries(titleGroups)) {
