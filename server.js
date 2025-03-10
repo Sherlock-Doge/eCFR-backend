@@ -20,15 +20,16 @@ app.use((req, res, next) => {
     next();
 });
 
-// ✅ Roman Numeral → Arabic Conversion (for CHAPTER/PART matching)
+// ✅ Utility: Normalize Roman numerals → Arabic numerals (bonus tip: helps match CHAPTER IDs like "VIII" → 8)
 function romanToArabic(roman) {
-    const map = {I:1,V:5,X:10,L:50,C:100,D:500,M:1000};
+    const map = { I: 1, V: 5, X: 10, L: 50, C: 100 };
     let total = 0, prev = 0;
-    roman.toUpperCase().split('').reverse().forEach(r => {
-        const curr = map[r] || 0;
-        total += curr < prev ? -curr : curr;
-        prev = curr;
-    });
+    for (let i = roman.length - 1; i >= 0; i--) {
+        const val = map[roman[i]];
+        if (!val) return roman; // Not a valid Roman numeral
+        total += val < prev ? -val : val;
+        prev = val;
+    }
     return total.toString();
 }
 
@@ -108,7 +109,7 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
     }
 });
 
-// ✅ Word Count by Agency (FINAL FIXED VERSION with Roman-to-Arabic normalization)
+// ✅ Word Count by Agency (Strict + Normalized Match)
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
     const slug = req.params.slug;
     const agencies = metadataCache.get("agenciesMetadata") || [];
@@ -127,9 +128,8 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
         const titleGroups = {};
         refs.forEach(r => {
             if (!titleGroups[r.title]) titleGroups[r.title] = [];
-            const raw = (r.chapter || r.part || "").toString().trim();
-            const normalized = romanToArabic(raw); // 🛠 FIX: Normalize CFR ref like "LXXI" → "71"
-            titleGroups[r.title].push(normalized);
+            const ref = (r.chapter || r.part || "").toString().trim();
+            titleGroups[r.title].push(ref);
         });
 
         for (const [titleNumber, targets] of Object.entries(titleGroups)) {
@@ -146,7 +146,8 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
             }
 
             console.log(`📦 Parsing Title ${titleNumber} for Agency '${agency.name}' → Targets: [${targets.join(", ")}]`);
-            const words = await countAgencyRelevantWords(xmlUrl, targets);
+            const normalizedTargets = targets.map(t => t.toString().trim().toUpperCase());
+            const words = await countAgencyRelevantWords(xmlUrl, normalizedTargets);
             console.log(`🔢 Final word count for Title ${titleNumber}: ${words}`);
             wordCountCache.set(cacheKey, words);
             total += words;
@@ -186,7 +187,7 @@ async function streamAndCountWords(url) {
     }
 }
 
-// ✅ Filtered Word Count using CHAPTER/PART tag N attribute
+// ✅ Filtered Word Count (CHAPTER/PART strict match with bonus debug logs)
 async function countAgencyRelevantWords(url, targets = []) {
     return new Promise(async (resolve, reject) => {
         try {
@@ -197,9 +198,10 @@ async function countAgencyRelevantWords(url, targets = []) {
 
             parser.on("opentag", node => {
                 if ((node.name === "CHAPTER" || node.name === "PART") && node.attributes) {
-                    const id = (node.attributes.N || "").toString().trim();
-                    capture = targets.includes(id);
-                    console.log(`📘 OPEN TAG ${node.name} - N: ${id} → Capture: ${capture}`);
+                    const rawId = (node.attributes.N || "").toString().trim().toUpperCase();
+                    const normalizedId = romanToArabic(rawId);
+                    capture = targets.includes(rawId) || targets.includes(normalizedId);
+                    console.log(`📘 OPEN TAG ${node.name} - Raw N: ${rawId}, Normalized: ${normalizedId} → Match: ${capture}`);
                 }
             });
 
@@ -207,7 +209,7 @@ async function countAgencyRelevantWords(url, targets = []) {
                 if (capture) {
                     const words = text.trim().split(/\s+/);
                     wordCount += words.filter(Boolean).length;
-                    console.log(`📝 Captured Text: ${text.trim()} | Words Counted: ${words.filter(Boolean).length}`);
+                    console.log(`📝 Captured Text: "${text.trim()}" → +${words.filter(Boolean).length}`);
                 }
             });
 
@@ -216,7 +218,7 @@ async function countAgencyRelevantWords(url, targets = []) {
             });
 
             parser.on("end", () => {
-                console.log(`✅ Final stream word count: ${wordCount}`);
+                console.log(`✅ Final filtered stream word count: ${wordCount}`);
                 resolve(wordCount);
             });
 
