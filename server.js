@@ -49,7 +49,9 @@ app.get("/api/agencies", async (req, res) => {
     try {
         console.log("📥 Fetching agency data...");
         const response = await axios.get(`${BASE_URL}/api/admin/v1/agencies.json`);
-        res.json({ agencies: response.data.agencies || response.data });
+        const agencies = response.data.agencies || response.data;
+        metadataCache.set("agenciesMetadata", agencies);
+        res.json({ agencies });
     } catch (e) {
         console.error("🚨 Agencies error:", e.message);
         res.status(500).json({ error: "Failed to fetch agencies" });
@@ -64,30 +66,32 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
         console.log(`✅ Word count cache hit for Title ${titleNumber}`);
         return res.json({ title: titleNumber, wordCount: cachedWordCount });
     }
+
     try {
         console.log(`📥 Calculating word count for Title ${titleNumber}`);
-        let cachedTitlesMetadata = metadataCache.get("titlesMetadata");
-        if (!cachedTitlesMetadata) {
+        let titles = metadataCache.get("titlesMetadata");
+        if (!titles) {
             const response = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
-            cachedTitlesMetadata = response.data.titles.map(t => ({
+            titles = response.data.titles.map(t => ({
                 number: t.number,
                 name: t.name,
                 latest_issue_date: t.latest_issue_date
             }));
-            metadataCache.set("titlesMetadata", cachedTitlesMetadata);
+            metadataCache.set("titlesMetadata", titles);
         }
-        const titleData = cachedTitlesMetadata.find(t => t.number.toString() === titleNumber);
-        if (!titleData) return res.status(404).json({ error: "Title not found" });
-        if (titleData.name === "Reserved") return res.json({ title: titleNumber, wordCount: 0 });
 
-        const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${titleData.latest_issue_date}/title-${titleNumber}.xml`;
+        const title = titles.find(t => t.number.toString() === titleNumber);
+        if (!title) return res.status(404).json({ error: "Title not found" });
+        if (title.name === "Reserved") return res.json({ title: titleNumber, wordCount: 0 });
+
+        const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${title.latest_issue_date}/title-${titleNumber}.xml`;
         const wordCount = await streamAndCountWords(xmlUrl);
         if (wordCount === null) return res.status(500).json({ error: "Failed to fetch XML" });
 
         wordCountCache.set(`wordCount-${titleNumber}`, wordCount);
         res.json({ title: titleNumber, wordCount });
     } catch (e) {
-        console.error(`🚨 Word Count error:`, e.message);
+        console.error("🚨 Word Count Error:", e.message);
         res.status(500).json({ error: "Failed to calculate word count" });
     }
 });
@@ -96,43 +100,51 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
     const slug = req.params.slug;
     const agencies = metadataCache.get("agenciesMetadata") || [];
-    const titlesMetadata = metadataCache.get("titlesMetadata") || [];
-    const agency = agencies.find(a => a.slug === slug || a.name.toLowerCase().replace(/\s+/g, "-") === slug);
+    const titles = metadataCache.get("titlesMetadata") || [];
+    const agency = agencies.find(a =>
+        a.slug === slug || a.name.toLowerCase().replace(/\s+/g, "-") === slug
+    );
     if (!agency) return res.status(404).json({ error: "Agency not found" });
 
-    const agencyName = agency.name;
-    const agencyTitleMap = metadataCache.get("agencyTitleMap") || {};
-    const relevantTitles = agencyTitleMap[agencyName] || [];
+    const titleNumbers = [];
+    if (agency.cfr_references && agency.cfr_references.length > 0) {
+        agency.cfr_references.forEach(ref => {
+            if (ref.title && !titleNumbers.includes(ref.title)) {
+                titleNumbers.push(ref.title);
+            }
+        });
+    }
 
-    let totalWords = 0;
+    let total = 0;
     try {
-        for (const title of relevantTitles) {
-            let cached = wordCountCache.get(`wordCount-${title}`);
+        for (const number of titleNumbers) {
+            let cached = wordCountCache.get(`wordCount-${number}`);
             if (cached !== undefined) {
-                totalWords += cached;
+                total += cached;
             } else {
-                const titleMeta = titlesMetadata.find(t => t.number == title);
-                if (!titleMeta || titleMeta.name === "Reserved") continue;
-                const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${titleMeta.latest_issue_date}/title-${title}.xml`;
-                const words = await streamAndCountWords(xmlUrl);
-                if (words !== null) {
-                    wordCountCache.set(`wordCount-${title}`, words);
-                    totalWords += words;
+                const meta = titles.find(t => t.number == number);
+                if (!meta || meta.name === "Reserved") continue;
+                const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${meta.latest_issue_date}/title-${number}.xml`;
+                const count = await streamAndCountWords(xmlUrl);
+                if (count !== null) {
+                    wordCountCache.set(`wordCount-${number}`, count);
+                    total += count;
                 }
             }
         }
-        res.json({ agency: agencyName, wordCount: totalWords });
+        res.json({ agency: agency.name, wordCount: total });
     } catch (e) {
-        console.error("🚨 Word Count by Agency error:", e.message);
+        console.error("🚨 Agency Word Count Error:", e.message);
         res.status(500).json({ error: "Failed to calculate agency word count" });
     }
 });
 
-// ✅ Stream Parser
+// ✅ Streaming Word Counter
 async function streamAndCountWords(url) {
     try {
         const response = await axios({ method: "GET", url, responseType: "stream", timeout: 60000 });
-        let wordCount = 0, buffer = "";
+        let wordCount = 0;
+        let buffer = "";
         return new Promise((resolve, reject) => {
             response.data.on("data", chunk => {
                 buffer += chunk.toString();
@@ -178,6 +190,7 @@ app.get("/api/search/count", async (req, res) => {
 app.get("/api/search/suggestions", async (req, res) => {
     const query = (req.query.query || "").toLowerCase().trim();
     if (!query) return res.json({ suggestions: [] });
+
     try {
         const cacheKey = `custom-suggestions-${query}`;
         if (suggestionCache.has(cacheKey)) return res.json({ suggestions: suggestionCache.get(cacheKey) });
@@ -202,7 +215,7 @@ app.get("/api/search/suggestions", async (req, res) => {
     }
 });
 
-// ✅ Relational Filtering Map
+// ✅ Static Relational Map (fallback)
 const staticMap = {
     "Department of Agriculture": [2, 5, 7, 48],
     "Department of Homeland Security": [6],
@@ -236,18 +249,18 @@ app.get("/api/agency-title-map", (req, res) => {
         const agencies = agenciesRes.data.agencies || agenciesRes.data;
         metadataCache.set("agenciesMetadata", agencies);
 
-        const agencyMap = {};
+        const map = {};
         agencies.forEach(a => {
             a.titles?.forEach(t => {
-                if (!agencyMap[a.name]) agencyMap[a.name] = [];
-                if (!agencyMap[a.name].includes(t.title_number)) {
-                    agencyMap[a.name].push(t.title_number);
+                if (!map[a.name]) map[a.name] = [];
+                if (!map[a.name].includes(t.title_number)) {
+                    map[a.name].push(t.title_number);
                 }
             });
         });
-        metadataCache.set("agencyTitleMap", agencyMap);
+        metadataCache.set("agencyTitleMap", map);
 
-        console.log("✅ Metadata preloaded and map cached");
+        console.log("✅ Metadata preloaded + agency-title map cached");
     } catch (e) {
         console.error("🚨 Metadata preload failed:", e.message);
     }
