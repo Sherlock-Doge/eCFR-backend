@@ -1,6 +1,7 @@
 const express = require("express");
 const axios = require("axios");
 const NodeCache = require("node-cache");
+const sax = require("sax"); // ADDED
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -96,7 +97,7 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
     }
 });
 
-// ✅ Word Count (Agency)
+// ✅ Word Count (Agency - Granular)
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
     const slug = req.params.slug;
     const agencies = metadataCache.get("agenciesMetadata") || [];
@@ -106,32 +107,34 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
     );
     if (!agency) return res.status(404).json({ error: "Agency not found" });
 
-    const titleNumbers = [];
-    if (agency.cfr_references && agency.cfr_references.length > 0) {
-        agency.cfr_references.forEach(ref => {
-            if (ref.title && !titleNumbers.includes(ref.title)) {
-                titleNumbers.push(ref.title);
-            }
-        });
-    }
+    const refs = agency.cfr_references || [];
+    if (!refs.length) return res.json({ agency: agency.name, wordCount: 0 });
 
     let total = 0;
     try {
-        for (const number of titleNumbers) {
-            let cached = wordCountCache.get(`wordCount-${number}`);
+        const titleGroups = {};
+        refs.forEach(r => {
+            if (!titleGroups[r.title]) titleGroups[r.title] = [];
+            titleGroups[r.title].push(r.chapter || r.part);
+        });
+
+        for (const [titleNumber, partsOrChapters] of Object.entries(titleGroups)) {
+            const titleMeta = titles.find(t => t.number == titleNumber);
+            if (!titleMeta || titleMeta.name === "Reserved") continue;
+
+            const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${titleMeta.latest_issue_date}/title-${titleNumber}.xml`;
+            const cacheKey = `agency-${slug}-title-${titleNumber}`;
+            let cached = wordCountCache.get(cacheKey);
             if (cached !== undefined) {
                 total += cached;
-            } else {
-                const meta = titles.find(t => t.number == number);
-                if (!meta || meta.name === "Reserved") continue;
-                const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${meta.latest_issue_date}/title-${number}.xml`;
-                const count = await streamAndCountWords(xmlUrl);
-                if (count !== null) {
-                    wordCountCache.set(`wordCount-${number}`, count);
-                    total += count;
-                }
+                continue;
             }
+
+            const words = await countAgencyRelevantWords(xmlUrl, partsOrChapters);
+            wordCountCache.set(cacheKey, words);
+            total += words;
         }
+
         res.json({ agency: agency.name, wordCount: total });
     } catch (e) {
         console.error("🚨 Agency Word Count Error:", e.message);
@@ -139,7 +142,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
     }
 });
 
-// ✅ Streaming Word Counter
+// ✅ Streaming Word Counter (Full Title)
 async function streamAndCountWords(url) {
     try {
         const response = await axios({ method: "GET", url, responseType: "stream", timeout: 60000 });
@@ -162,6 +165,50 @@ async function streamAndCountWords(url) {
         console.error("🚨 Stream error:", e.message);
         return null;
     }
+}
+
+// ✅ Streaming Filtered Word Counter (Chapters/Parts Only)
+async function countAgencyRelevantWords(url, targets = []) {
+    return new Promise(async (resolve, reject) => {
+        try {
+            const response = await axios({ method: "GET", url, responseType: "stream", timeout: 60000 });
+            const parser = sax.createStream(true);
+            let wordCount = 0;
+            let capture = false;
+            let buffer = "";
+
+            parser.on("opentag", node => {
+                if ((node.name === "CHAPTER" || node.name === "PART") && node.attributes && node.attributes.type) {
+                    const type = node.attributes.type;
+                    const id = node.attributes.identifier || "";
+                    const match = targets.some(t => id.includes(t));
+                    capture = match;
+                }
+            });
+
+            parser.on("text", text => {
+                if (capture) {
+                    const words = text.trim().split(/\s+/);
+                    wordCount += words.filter(w => w).length;
+                }
+            });
+
+            parser.on("closetag", name => {
+                if (name === "CHAPTER" || name === "PART") capture = false;
+            });
+
+            parser.on("end", () => resolve(wordCount));
+            parser.on("error", err => {
+                console.error("🚨 SAX error:", err.message);
+                reject(err);
+            });
+
+            response.data.pipe(parser);
+        } catch (e) {
+            console.error("🚨 Filtered stream error:", e.message);
+            reject(e);
+        }
+    });
 }
 
 // ✅ Search
@@ -215,7 +262,7 @@ app.get("/api/search/suggestions", async (req, res) => {
     }
 });
 
-// ✅ Static Relational Map (fallback)
+// ✅ Static Relational Map (Fallback)
 const staticMap = {
     "Department of Agriculture": [2, 5, 7, 48],
     "Department of Homeland Security": [6],
@@ -233,7 +280,7 @@ app.get("/api/agency-title-map", (req, res) => {
     res.json({ map: metadataCache.get("agencyTitleMap") || staticMap });
 });
 
-// ✅ Preload Metadata
+// ✅ Metadata Preload
 (async function preloadMetadata() {
     try {
         const titlesRes = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
@@ -260,7 +307,7 @@ app.get("/api/agency-title-map", (req, res) => {
         });
         metadataCache.set("agencyTitleMap", map);
 
-        console.log("✅ Metadata preloaded + agency-title map cached");
+        console.log("✅ Metadata preloaded + map cached");
     } catch (e) {
         console.error("🚨 Metadata preload failed:", e.message);
     }
