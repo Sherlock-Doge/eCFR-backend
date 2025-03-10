@@ -6,12 +6,12 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 const BASE_URL = "https://www.ecfr.gov";
 
-// ✅ Initialize Cache (Word Counts: 60 days, Metadata: 24 hours, Search Suggestions: 12 hours)
+// ✅ Caches
 const wordCountCache = new NodeCache({ stdTTL: 5184000, checkperiod: 86400 });
 const metadataCache = new NodeCache({ stdTTL: 86400, checkperiod: 3600 });
 const suggestionCache = new NodeCache({ stdTTL: 43200, checkperiod: 3600 });
 
-// 📌 ✅ CORS Middleware - Allows frontend access
+// ✅ Middleware
 app.use((req, res, next) => {
     res.header("Access-Control-Allow-Origin", "*");
     res.header("Access-Control-Allow-Methods", "GET, OPTIONS");
@@ -19,13 +19,12 @@ app.use((req, res, next) => {
     next();
 });
 
-// 📌 Fetch Titles (Summary Info) with Caching
+// ✅ Titles
 app.get("/api/titles", async (req, res) => {
     try {
         let cachedTitles = metadataCache.get("titlesMetadata");
-
         if (!cachedTitles) {
-            console.log("📥 Fetching eCFR Titles (Not in cache)...");
+            console.log("📥 Fetching eCFR Titles...");
             const response = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
             cachedTitles = response.data.titles.map(t => ({
                 number: t.number,
@@ -36,44 +35,42 @@ app.get("/api/titles", async (req, res) => {
             }));
             metadataCache.set("titlesMetadata", cachedTitles);
         } else {
-            console.log("✅ Using cached Titles Metadata...");
+            console.log("✅ Titles from cache");
         }
-
         res.json({ titles: cachedTitles });
-    } catch (error) {
-        console.error("🚨 Error fetching titles:", error.message);
-        res.status(500).json({ error: "Failed to fetch title data" });
+    } catch (e) {
+        console.error("🚨 Titles error:", e.message);
+        res.status(500).json({ error: "Failed to fetch titles" });
     }
 });
 
-// 📌 Fetch Agencies
+// ✅ Agencies
 app.get("/api/agencies", async (req, res) => {
     try {
         console.log("📥 Fetching agency data...");
         const response = await axios.get(`${BASE_URL}/api/admin/v1/agencies.json`);
-        res.json(response.data);
-    } catch (error) {
-        console.error("🚨 Error fetching agencies:", error.message);
-        res.status(500).json({ error: "Failed to fetch agency data" });
+        res.json({ agencies: response.data.agencies || response.data });
+    } catch (e) {
+        console.error("🚨 Agencies error:", e.message);
+        res.status(500).json({ error: "Failed to fetch agencies" });
     }
 });
 
-// 📌 Fetch Word Count for a Single Title
+// ✅ Word Count
 app.get("/api/wordcount/:titleNumber", async (req, res) => {
     const titleNumber = req.params.titleNumber;
     let cachedWordCount = wordCountCache.get(`wordCount-${titleNumber}`);
     if (cachedWordCount !== undefined) {
-        console.log(`✅ Returning cached word count for Title ${titleNumber}`);
+        console.log(`✅ Word count cache hit for Title ${titleNumber}`);
         return res.json({ title: titleNumber, wordCount: cachedWordCount });
     }
 
     try {
-        console.log(`📥 Fetching word count for Title ${titleNumber}...`);
+        console.log(`📥 Calculating word count for Title ${titleNumber}`);
         let cachedTitlesMetadata = metadataCache.get("titlesMetadata");
-
         if (!cachedTitlesMetadata) {
-            const titlesResponse = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
-            cachedTitlesMetadata = titlesResponse.data.titles.map(t => ({
+            const response = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
+            cachedTitlesMetadata = response.data.titles.map(t => ({
                 number: t.number,
                 name: t.name,
                 latest_issue_date: t.latest_issue_date
@@ -85,30 +82,21 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
         if (!titleData) return res.status(404).json({ error: "Title not found" });
         if (titleData.name === "Reserved") return res.json({ title: titleNumber, wordCount: 0 });
 
-        const issueDate = titleData.latest_issue_date;
-        const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${issueDate}/title-${titleNumber}.xml`;
+        const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${titleData.latest_issue_date}/title-${titleNumber}.xml`;
         const wordCount = await streamAndCountWords(xmlUrl);
-
-        if (wordCount === null) return res.status(500).json({ error: "Failed to fetch XML data" });
+        if (wordCount === null) return res.status(500).json({ error: "Failed to fetch XML" });
 
         wordCountCache.set(`wordCount-${titleNumber}`, wordCount);
         res.json({ title: titleNumber, wordCount });
-    } catch (error) {
-        console.error(`🚨 Error processing Title ${titleNumber}:`, error.message);
-        res.status(500).json({ error: "Failed to fetch word count" });
+    } catch (e) {
+        console.error(`🚨 Word Count error:`, e.message);
+        res.status(500).json({ error: "Failed to calculate word count" });
     }
 });
 
-// 📌 Efficient Stream Word Count
 async function streamAndCountWords(url) {
     try {
-        const response = await axios({
-            method: "GET",
-            url,
-            responseType: "stream",
-            timeout: 60000
-        });
-
+        const response = await axios({ method: "GET", url, responseType: "stream", timeout: 60000 });
         let wordCount = 0;
         let buffer = "";
 
@@ -119,66 +107,103 @@ async function streamAndCountWords(url) {
                 wordCount += words.length - 1;
                 buffer = words.pop();
             });
-
             response.data.on("end", () => {
                 if (buffer.length > 0) wordCount++;
                 resolve(wordCount);
             });
-
             response.data.on("error", reject);
         });
-    } catch (error) {
-        console.error("🚨 Error streaming XML:", error.message);
+    } catch (e) {
+        console.error("🚨 Stream error:", e.message);
         return null;
     }
 }
 
-// ✅ 🔍 SEARCH API: /api/search
+// ✅ Search
 app.get("/api/search", async (req, res) => {
     try {
         const params = { ...req.query };
         const response = await axios.get(`${BASE_URL}/api/search/v1/results`, { params });
         res.json(response.data);
-    } catch (error) {
-        console.error("🚨 Error in /api/search:", error.message);
+    } catch (e) {
+        console.error("🚨 Search error:", e.message);
         res.status(500).json({ error: "Search failed" });
     }
 });
 
-// ✅ 🔍 SEARCH COUNT API: /api/search/count
+// ✅ Search Count
 app.get("/api/search/count", async (req, res) => {
     try {
-        const params = { ...req.query };
-        const response = await axios.get(`${BASE_URL}/api/search/v1/count`, { params });
+        const response = await axios.get(`${BASE_URL}/api/search/v1/count`, { params: req.query });
         res.json(response.data);
-    } catch (error) {
-        console.error("🚨 Error in /api/search/count:", error.message);
+    } catch (e) {
+        console.error("🚨 Search Count error:", e.message);
         res.status(500).json({ error: "Search count failed" });
     }
 });
 
-// ✅ 🔍 SEARCH SUGGESTIONS API: /api/search/suggestions
+// ✅ Custom Suggestions
 app.get("/api/search/suggestions", async (req, res) => {
-    const query = req.query.query || "";
-    const cacheKey = `suggestions-${query.toLowerCase()}`;
+    const query = (req.query.query || "").toLowerCase().trim();
+    if (!query) return res.json({ suggestions: [] });
 
     try {
+        const cacheKey = `custom-suggestions-${query}`;
         if (suggestionCache.has(cacheKey)) {
-            return res.json(suggestionCache.get(cacheKey));
+            return res.json({ suggestions: suggestionCache.get(cacheKey) });
         }
 
-        const params = { query };
-        const response = await axios.get(`${BASE_URL}/api/search/v1/suggestions`, { params });
+        const titles = metadataCache.get("titlesMetadata") || [];
+        const agencies = metadataCache.get("agenciesMetadata") || [];
 
-        suggestionCache.set(cacheKey, response.data);
-        res.json(response.data);
-    } catch (error) {
-        console.error("🚨 Error in /api/search/suggestions:", error.message);
-        res.status(500).json({ error: "Search suggestions failed" });
+        let suggestions = [];
+
+        // Match titles
+        titles.forEach(t => {
+            if (t.name.toLowerCase().includes(query)) {
+                suggestions.push(`Title ${t.number}: ${t.name}`);
+            }
+        });
+
+        // Match agencies
+        agencies.forEach(a => {
+            if (a.name.toLowerCase().includes(query)) {
+                suggestions.push(a.name);
+            }
+        });
+
+        // Dedup + Limit
+        suggestions = [...new Set(suggestions)].slice(0, 10);
+        suggestionCache.set(cacheKey, suggestions);
+        res.json({ suggestions });
+    } catch (e) {
+        console.error("🚨 Suggestion error:", e.message);
+        res.status(500).json({ suggestions: [] });
     }
 });
 
-// 📌 Start Server
+// ✅ Preload metadata into cache for custom suggestions
+(async function preloadMetadata() {
+    try {
+        const titlesRes = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
+        metadataCache.set("titlesMetadata", titlesRes.data.titles.map(t => ({
+            number: t.number,
+            name: t.name,
+            latest_issue_date: t.latest_issue_date,
+            latest_amended_on: t.latest_amended_on,
+            up_to_date_as_of: t.up_to_date_as_of
+        })));
+
+        const agenciesRes = await axios.get(`${BASE_URL}/api/admin/v1/agencies.json`);
+        metadataCache.set("agenciesMetadata", agenciesRes.data.agencies || agenciesRes.data);
+
+        console.log("✅ Preloaded metadata into cache");
+    } catch (e) {
+        console.error("🚨 Metadata preload failed:", e.message);
+    }
+})();
+
+// ✅ Start
 app.listen(PORT, () => {
     console.log(`✅ Server running on port ${PORT}`);
 });
