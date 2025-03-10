@@ -182,7 +182,26 @@ app.get("/api/search/suggestions", async (req, res) => {
     }
 });
 
-// ✅ Preload metadata into cache for custom suggestions
+// ✅ NEW: Relational Filtering Map
+const agencyTitleMap = {
+    "Department of Agriculture": [2, 5, 7, 48],
+    "Department of Homeland Security": [6],
+    "Department of Defense": [32],
+    "Department of Transportation": [49],
+    "Department of Energy": [10],
+    "Environmental Protection Agency": [40],
+    "Department of the Interior": [50],
+    "Department of Commerce": [15],
+    "Department of Justice": [28],
+    "Department of State": [22],
+    // Add more mappings as needed
+};
+
+app.get("/api/agency-title-map", (req, res) => {
+    res.json({ map: agencyTitleMap });
+});
+
+// ✅ Preload metadata into cache
 (async function preloadMetadata() {
     try {
         const titlesRes = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
