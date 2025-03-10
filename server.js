@@ -1,7 +1,7 @@
 const express = require("express");
 const axios = require("axios");
 const NodeCache = require("node-cache");
-const sax = require("sax"); // ADDED
+const sax = require("sax");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -169,7 +169,7 @@ async function streamAndCountWords(url) {
     }
 }
 
-// ✅ Streaming Filtered Word Counter (with Debug Logs)
+// ✅ Streaming Filtered Word Counter (Fixed Matching)
 async function countAgencyRelevantWords(url, targets = []) {
     return new Promise(async (resolve, reject) => {
         try {
@@ -181,7 +181,7 @@ async function countAgencyRelevantWords(url, targets = []) {
             parser.on("opentag", node => {
                 console.log("📘 OPEN TAG:", node.name, node.attributes);
                 if ((node.name === "CHAPTER" || node.name === "PART") && node.attributes) {
-                    const id = node.attributes.identifier || "";
+                    const id = node.attributes.N || ""; // ✅ FIXED HERE
                     const match = targets.some(t => id.includes(t));
                     console.log(`🔍 Matching [${id}] against targets [${targets}] → ${match}`);
                     capture = match;
@@ -201,6 +201,9 @@ async function countAgencyRelevantWords(url, targets = []) {
             });
 
             parser.on("end", () => {
+                if (wordCount === 0) {
+                    console.warn(`⚠️ Word count returned 0 for ${url} using targets: ${targets}`);
+                }
                 console.log("✅ Final word count for stream:", wordCount);
                 resolve(wordCount);
             });
