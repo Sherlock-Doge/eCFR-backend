@@ -1,3 +1,4 @@
+
 const express = require("express");
 const axios = require("axios");
 const NodeCache = require("node-cache");
@@ -24,7 +25,7 @@ app.get("/api/titles", async (req, res) => {
     try {
         let cachedTitles = metadataCache.get("titlesMetadata");
         if (!cachedTitles) {
-            console.log("📥 Fetching Titles...");
+            console.log("📥 Fetching eCFR Titles...");
             const response = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
             cachedTitles = response.data.titles.map(t => ({
                 number: t.number,
@@ -34,6 +35,8 @@ app.get("/api/titles", async (req, res) => {
                 up_to_date_as_of: t.up_to_date_as_of
             }));
             metadataCache.set("titlesMetadata", cachedTitles);
+        } else {
+            console.log("✅ Titles from cache");
         }
         res.json({ titles: cachedTitles });
     } catch (e) {
@@ -45,36 +48,12 @@ app.get("/api/titles", async (req, res) => {
 // ✅ Agencies
 app.get("/api/agencies", async (req, res) => {
     try {
-        let cachedAgencies = metadataCache.get("agenciesMetadata");
-        if (!cachedAgencies) {
-            console.log("📥 Fetching Agencies...");
-            const response = await axios.get(`${BASE_URL}/api/admin/v1/agencies.json`);
-            cachedAgencies = response.data.agencies || response.data;
-            metadataCache.set("agenciesMetadata", cachedAgencies);
-        }
-        res.json({ agencies: cachedAgencies });
+        console.log("📥 Fetching agency data...");
+        const response = await axios.get(`${BASE_URL}/api/admin/v1/agencies.json`);
+        res.json({ agencies: response.data.agencies || response.data });
     } catch (e) {
         console.error("🚨 Agencies error:", e.message);
         res.status(500).json({ error: "Failed to fetch agencies" });
-    }
-});
-
-// ✅ Agency → Title Map
-app.get("/api/agency-title-map", async (req, res) => {
-    try {
-        const agencies = metadataCache.get("agenciesMetadata") || [];
-        const titleMap = {};
-
-        agencies.forEach(a => {
-            if (a.name && a.titles) {
-                titleMap[a.name] = Array.from(new Set(a.titles.map(t => t.number)));
-            }
-        });
-
-        res.json({ map: titleMap });
-    } catch (e) {
-        console.error("🚨 AgencyTitleMap error:", e.message);
-        res.status(500).json({ error: "Failed to build map" });
     }
 });
 
@@ -83,31 +62,46 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
     const titleNumber = req.params.titleNumber;
     let cachedWordCount = wordCountCache.get(`wordCount-${titleNumber}`);
     if (cachedWordCount !== undefined) {
+        console.log(`✅ Word count cache hit for Title ${titleNumber}`);
         return res.json({ title: titleNumber, wordCount: cachedWordCount });
     }
 
     try {
-        const titles = metadataCache.get("titlesMetadata") || [];
-        const titleData = titles.find(t => t.number.toString() === titleNumber);
-        if (!titleData || titleData.name === "Reserved") return res.json({ title: titleNumber, wordCount: 0 });
+        console.log(`📥 Calculating word count for Title ${titleNumber}`);
+        let cachedTitlesMetadata = metadataCache.get("titlesMetadata");
+        if (!cachedTitlesMetadata) {
+            const response = await axios.get(`${BASE_URL}/api/versioner/v1/titles.json`);
+            cachedTitlesMetadata = response.data.titles.map(t => ({
+                number: t.number,
+                name: t.name,
+                latest_issue_date: t.latest_issue_date
+            }));
+            metadataCache.set("titlesMetadata", cachedTitlesMetadata);
+        }
+
+        const titleData = cachedTitlesMetadata.find(t => t.number.toString() === titleNumber);
+        if (!titleData) return res.status(404).json({ error: "Title not found" });
+        if (titleData.name === "Reserved") return res.json({ title: titleNumber, wordCount: 0 });
 
         const xmlUrl = `${BASE_URL}/api/versioner/v1/full/${titleData.latest_issue_date}/title-${titleNumber}.xml`;
-        const count = await streamAndCountWords(xmlUrl);
-        if (count !== null) {
-            wordCountCache.set(`wordCount-${titleNumber}`, count);
-            return res.json({ title: titleNumber, wordCount: count });
-        }
-        return res.status(500).json({ error: "Stream error" });
+        const wordCount = await streamAndCountWords(xmlUrl);
+        if (wordCount === null) return res.status(500).json({ error: "Failed to fetch XML" });
+
+        wordCountCache.set(`wordCount-${titleNumber}`, wordCount);
+        res.json({ title: titleNumber, wordCount });
     } catch (e) {
-        console.error("🚨 Word Count error:", e.message);
-        return res.status(500).json({ error: "Word count failed" });
+        console.error(`🚨 Word Count error:`, e.message);
+        res.status(500).json({ error: "Failed to calculate word count" });
     }
 });
 
+// ✅ Word Counter
 async function streamAndCountWords(url) {
     try {
-        const response = await axios({ method: "GET", url, responseType: "stream" });
-        let wordCount = 0, buffer = "";
+        const response = await axios({ method: "GET", url, responseType: "stream", timeout: 60000 });
+        let wordCount = 0;
+        let buffer = "";
+
         return new Promise((resolve, reject) => {
             response.data.on("data", chunk => {
                 buffer += chunk.toString();
@@ -130,7 +124,8 @@ async function streamAndCountWords(url) {
 // ✅ Search
 app.get("/api/search", async (req, res) => {
     try {
-        const response = await axios.get(`${BASE_URL}/api/search/v1/results`, { params: req.query });
+        const params = { ...req.query };
+        const response = await axios.get(`${BASE_URL}/api/search/v1/results`, { params });
         res.json(response.data);
     } catch (e) {
         console.error("🚨 Search error:", e.message);
@@ -149,21 +144,33 @@ app.get("/api/search/count", async (req, res) => {
     }
 });
 
-// ✅ Suggestions
+// ✅ Custom Suggestions
 app.get("/api/search/suggestions", async (req, res) => {
     const query = (req.query.query || "").toLowerCase().trim();
     if (!query) return res.json({ suggestions: [] });
 
     try {
         const cacheKey = `custom-suggestions-${query}`;
-        if (suggestionCache.has(cacheKey)) return res.json({ suggestions: suggestionCache.get(cacheKey) });
+        if (suggestionCache.has(cacheKey)) {
+            return res.json({ suggestions: suggestionCache.get(cacheKey) });
+        }
 
         const titles = metadataCache.get("titlesMetadata") || [];
         const agencies = metadataCache.get("agenciesMetadata") || [];
+
         let suggestions = [];
 
-        titles.forEach(t => { if (t.name.toLowerCase().includes(query)) suggestions.push(`Title ${t.number}: ${t.name}`); });
-        agencies.forEach(a => { if (a.name.toLowerCase().includes(query)) suggestions.push(a.name); });
+        titles.forEach(t => {
+            if (t.name.toLowerCase().includes(query)) {
+                suggestions.push(`Title ${t.number}: ${t.name}`);
+            }
+        });
+
+        agencies.forEach(a => {
+            if (a.name.toLowerCase().includes(query)) {
+                suggestions.push(a.name);
+            }
+        });
 
         suggestions = [...new Set(suggestions)].slice(0, 10);
         suggestionCache.set(cacheKey, suggestions);
@@ -172,6 +179,24 @@ app.get("/api/search/suggestions", async (req, res) => {
         console.error("🚨 Suggestion error:", e.message);
         res.status(500).json({ suggestions: [] });
     }
+});
+
+// ✅ Relational Filtering API
+const agencyTitleMap = {
+    "Department of Agriculture": [2, 5, 7, 48],
+    "Department of Homeland Security": [6],
+    "Department of Defense": [32],
+    "Department of Transportation": [49],
+    "Department of Energy": [10],
+    "Environmental Protection Agency": [40],
+    "Department of the Interior": [50],
+    "Department of Commerce": [15],
+    "Department of Justice": [28],
+    "Department of State": [22]
+};
+
+app.get("/api/agency-title-map", (req, res) => {
+    res.json({ map: agencyTitleMap });
 });
 
 // ✅ Preload metadata
@@ -195,7 +220,7 @@ app.get("/api/search/suggestions", async (req, res) => {
     }
 })();
 
-// ✅ Start
+// ✅ Start server
 app.listen(PORT, () => {
     console.log(`✅ Server running on port ${PORT}`);
 });
