@@ -1,4 +1,4 @@
-// eCFR Analyzer Backend – Final Word Count Fix (Scrape All Sections per Chapter)
+// eCFR Analyzer Backend – True HTML Scrape Word Count by Agency (Title > Chapter > Section)
 const express = require("express");
 const axios = require("axios");
 const NodeCache = require("node-cache");
@@ -8,10 +8,12 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 const BASE_URL = "https://www.ecfr.gov";
 
+// Caches
 const wordCountCache = new NodeCache({ stdTTL: 5184000, checkperiod: 86400 });
 const metadataCache = new NodeCache({ stdTTL: 86400, checkperiod: 3600 });
 const suggestionCache = new NodeCache({ stdTTL: 43200, checkperiod: 3600 });
 
+// Middleware
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, OPTIONS");
@@ -95,72 +97,53 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
   }
 });
 
-// ✅ Final Word Count by Agency – Full Title > Chapter > Section traversal
-app.get("/api/wordcount/agency/:slug", async (req, res) => {
+// ✅ NEW TEST ROUTE: Show Section URLs for Agency using Structure JSON
+app.get("/api/test-agency-sections/:slug", async (req, res) => {
   const slug = req.params.slug;
   const agencies = metadataCache.get("agenciesMetadata") || [];
-  const agency = agencies.find(a =>
-    a.slug === slug || a.name.toLowerCase().replace(/\s+/g, "-") === slug
-  );
+  const titles = metadataCache.get("titlesMetadata") || [];
+  const agency = agencies.find(a => a.slug === slug || a.name.toLowerCase().replace(/\s+/g, "-") === slug);
   if (!agency) return res.status(404).json({ error: "Agency not found" });
 
   const refs = agency.cfr_references || [];
-  if (!refs.length) return res.json({ agency: agency.name, total: 0, breakdowns: [] });
-
-  let totalWords = 0;
-  const breakdowns = [];
+  const sectionUrls = [];
 
   try {
     for (const ref of refs) {
-      const title = ref.title;
-      const chapter = ref.chapter || "N/A";
-      const cacheKey = `agency-sectionmap-${slug}-title-${title}-chapter-${chapter}`;
-      let words = wordCountCache.get(cacheKey);
+      const titleNum = ref.title;
+      const chapterId = ref.chapter || "";
 
-      if (words !== undefined) {
-        console.log(`✅ Cache hit: ${cacheKey}`);
-      } else {
-        console.log(`🌐 Scraping Title ${title}, Chapter ${chapter}...`);
-        const chapterURL = `${BASE_URL}/current/title-${title}/chapter-${chapter}`;
-        try {
-          const chapterPage = await axios.get(chapterURL, { timeout: 30000 });
-          const dom = new JSDOM(chapterPage.data);
-          const links = Array.from(dom.window.document.querySelectorAll("a[href*='/current/title-']"))
-            .map(a => a.href)
-            .filter(href => /\/current\/title-\d+\/.+\/section-\d+/.test(href));
-          const uniqueLinks = [...new Set(links)];
+      const titleMeta = titles.find(t => t.number == titleNum);
+      if (!titleMeta) continue;
 
-          words = 0;
-          for (const sectionURL of uniqueLinks) {
-            try {
-              const sectionPage = await axios.get(sectionURL, { timeout: 30000 });
-              const sectionDOM = new JSDOM(sectionPage.data);
-              const content = sectionDOM.window.document.querySelector("main")?.textContent ||
-                              sectionDOM.window.document.querySelector("#content")?.textContent ||
-                              sectionDOM.window.document.body?.textContent || "";
-              const wordCount = content.trim().split(/\s+/).filter(Boolean).length;
-              words += wordCount;
-              console.log(`📄 ${sectionURL} → ${wordCount} words`);
-            } catch (err) {
-              console.warn(`⚠️ Failed section: ${sectionURL}`);
-            }
-          }
+      const structureRes = await axios.get(`${BASE_URL}/api/versioner/v1/structure/${titleMeta.latest_issue_date}/title-${titleNum}.json`);
+      const structure = structureRes.data;
 
-          wordCountCache.set(cacheKey, words);
-        } catch (e) {
-          console.warn(`⚠️ Chapter page failed: ${chapterURL}`);
-          words = 0;
+      const traverse = (node, path = []) => {
+        if (node.type === "section" && node.identifier) {
+          const sectionPath = path.concat([node.identifier]);
+          const urlPath = sectionPath.join("/").replace(/\/+/g, "/");
+          sectionUrls.push(`${BASE_URL}/current/title-${titleNum}/${urlPath}`);
         }
-      }
+        if (node.children) {
+          for (const child of node.children) {
+            traverse(child, path.concat([node.identifier || ""]));
+          }
+        }
+      };
 
-      breakdowns.push({ title, chapter, wordCount: words });
-      totalWords += words;
+      structure.children.forEach(child => {
+        if (child.identifier?.includes(`chapter-${chapterId}`) || child.label?.includes(chapterId)) {
+          traverse(child, [child.identifier]);
+        }
+      });
     }
 
-    res.json({ agency: agency.name, total: totalWords, breakdowns });
+    console.log(`✅ Section URLs for ${agency.name}:`, sectionUrls);
+    res.json({ agency: agency.name, sectionUrls });
   } catch (err) {
-    console.error("🚨 Agency Word Count Error:", err.message);
-    res.status(500).json({ error: "Failed to process agency sections" });
+    console.error("🚨 Structure traversal error:", err.message);
+    res.status(500).json({ error: "Traversal failed" });
   }
 });
 
