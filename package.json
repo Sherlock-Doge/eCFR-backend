@@ -9,7 +9,7 @@
     "cors": "^2.8.5",
     "node-cache": "^5.1.2",
     "jsdom": "^24.0.0",
-    "sax": "^1.2.4",
+    "sax": "^1.2.4"
   },
   "scripts": {
     "start": "node server.js"
