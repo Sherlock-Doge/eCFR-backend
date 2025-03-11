@@ -347,3 +347,77 @@ app.get("/api/test-puppeteer", async (req, res) => {
 });
 
 
+
+// ===================== TEMP TEST: /api/test-titlexml/:titleNumber =====================
+app.get("/api/test-titlexml/:titleNumber", async (req, res) => {
+  const axios = require("axios");
+  const sax = require("sax");
+  const titleNumber = req.params.titleNumber;
+  const VERSIONER = "https://www.ecfr.gov/api/versioner/v1";
+
+  try {
+    // Get latest issue date first
+    const metaRes = await axios.get(`${VERSIONER}/titles.json`);
+    const titleMeta = metaRes.data.titles.find(t => t.number.toString() === titleNumber.toString());
+    if (!titleMeta) return res.status(404).json({ error: "Title not found" });
+
+    const xmlUrl = `${VERSIONER}/full/${titleMeta.latest_issue_date}/title-${titleNumber}.xml`;
+    const response = await axios({ method: "GET", url: xmlUrl, responseType: "stream" });
+
+    let currentSection = null;
+    let currentText = "";
+    const results = [];
+
+    const parser = sax.createStream(true, { trim: true });
+
+    parser.on("opentag", node => {
+      if (node.name === "SECTION") {
+        currentSection = { identifier: node.attributes?.IDENTIFIER || "", subject: "", content: "" };
+      }
+      if (node.name === "SUBJECT" && currentSection) currentText = "";
+      if (node.name === "P" && currentSection) currentText = "";
+    });
+
+    parser.on("text", text => {
+      if (currentSection && currentText !== null) {
+        currentText += text + " ";
+      }
+    });
+
+    parser.on("closetag", tag => {
+      if (!currentSection) return;
+      if (tag === "SUBJECT") {
+        currentSection.subject = currentText.trim();
+      }
+      if (tag === "P") {
+        currentSection.content += currentText.trim() + " ";
+      }
+      if (tag === "SECTION") {
+        const wordCount = currentSection.content.split(/\s+/).filter(Boolean).length;
+        results.push({
+          section: currentSection.identifier,
+          title: currentSection.subject,
+          wordCount
+        });
+        currentSection = null;
+        currentText = "";
+      }
+    });
+
+    parser.on("error", err => {
+      console.error("❌ SAX parser error:", err.message);
+      res.status(500).json({ error: "Parsing failed" });
+    });
+
+    parser.on("end", () => {
+      res.json({ title: `Title ${titleNumber}`, sections: results });
+    });
+
+    response.data.pipe(parser);
+  } catch (e) {
+    console.error("🚨 /api/test-titlexml error:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
