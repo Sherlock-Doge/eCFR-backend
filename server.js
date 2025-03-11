@@ -306,12 +306,22 @@ app.get("/api/test-puppeteer", async (req, res) => {
     await page.goto(testUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
 
     const text = await page.evaluate(() => {
-      const el =
-        document.querySelector(".content-col") ||
-        document.querySelector("main") ||
-        document.querySelector("#content") ||
-        document.querySelector("#primary-content");
-      return el ? el.innerText : "(No content found)";
+      const selectors = [
+        ".section",               // ✅ most consistent ECFR content block
+        ".content-col",
+        "main",
+        "#content",
+        "#primary-content"
+      ];
+      for (const sel of selectors) {
+        const el = document.querySelector(sel);
+        if (el && el.innerText.trim().length > 20) {
+          return el.innerText.trim();
+        }
+      }
+
+      // Fallback: try body if all else fails
+      return document.body?.innerText?.trim() || "(No content found)";
     });
 
     const wordCount = text.split(/\s+/).filter(Boolean).length;
@@ -320,7 +330,7 @@ app.get("/api/test-puppeteer", async (req, res) => {
 
     res.json({
       url: testUrl,
-      preview: text.slice(0, 200),
+      preview: text.slice(0, 300), // you can increase this if needed
       wordCount
     });
   } catch (e) {
