@@ -101,7 +101,7 @@ async function streamAndCountWords(url) {
   }
 }
 
-// ===================== Word Count by Agency (XML-based scoped version) =====================
+// ===================== Word Count by Agency (XML-based scoped version with fallback matching) =====================
 
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
   const sax = require("sax");
@@ -119,14 +119,29 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
   let totalWords = 0;
   const breakdowns = [];
 
+  // Fallback structure node match by agency name
+  const findFallbackNodeByAgencyName = (node, agencyName) => {
+    if (!node || typeof node !== "object") return null;
+    const heading = (node.heading || "").toLowerCase();
+    const normalizedAgency = agencyName.toLowerCase();
+    if (heading.includes(normalizedAgency)) return node;
+    if (node.children) {
+      for (const child of node.children) {
+        const found = findFallbackNodeByAgencyName(child, agencyName);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+
   for (const ref of refs) {
     const title = ref.title;
     const chapter = ref.chapter;
-    const cacheKey = `agency-scope-${slug}-title-${title}-chapter-${chapter}`;
+    const cacheKey = `agency-scope-${slug}-title-${title}-chapter-${chapter || "fallback"}`;
     let cachedCount = wordCountCache.get(cacheKey);
 
     if (cachedCount !== undefined) {
-      breakdowns.push({ title, chapter, wordCount: cachedCount });
+      breakdowns.push({ title, chapter: chapter || "fallback", wordCount: cachedCount });
       totalWords += cachedCount;
       continue;
     }
@@ -142,23 +157,36 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
       const structure = (await axios.get(structureUrl)).data;
 
       const sectionSet = new Set();
-      let inChapter = false;
 
       const recurse = (node, inScope = false) => {
-        if (node.type === "chapter" && node.identifier === chapter) inScope = true;
+        if (!node || typeof node !== "object") return;
         if (inScope && node.type === "section") sectionSet.add(node.identifier);
+        if (node.type === "chapter" && node.identifier === chapter) inScope = true;
         if (node.children) node.children.forEach((child) => recurse(child, inScope));
       };
 
       recurse(structure);
 
+      // Fallback: try to match structure node by agency name if no sections found
+      if (!sectionSet.size && (!chapter || chapter === "N/A" || chapter === "undefined")) {
+        const fallbackNode = findFallbackNodeByAgencyName(structure, agency.name) ||
+                             findFallbackNodeByAgencyName(structure, agency.short_name || "");
+        if (fallbackNode) {
+          const deepCollect = (node) => {
+            if (node.type === "section") sectionSet.add(node.identifier);
+            if (node.children) node.children.forEach(deepCollect);
+          };
+          deepCollect(fallbackNode);
+        }
+      }
+
       if (!sectionSet.size) {
         console.warn(`⚠️ No sections found for Title ${title}, Chapter ${chapter}`);
-        breakdowns.push({ title, chapter, wordCount: 0 });
+        breakdowns.push({ title, chapter: chapter || "fallback", wordCount: 0 });
         continue;
       }
 
-      // STEP 2: Stream XML and collect word count for those sections
+      // STEP 2: Stream XML and collect word count for matched sections
       const xmlUrl = `${VERSIONER}/full/${issueDate}/title-${title}.xml`;
       const response = await axios({ method: "GET", url: xmlUrl, responseType: "stream", timeout: 60000 });
       const parser = sax.createStream(true);
@@ -208,7 +236,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
 
       parser.on("end", () => {
         wordCountCache.set(cacheKey, wordCount);
-        breakdowns.push({ title, chapter, wordCount });
+        breakdowns.push({ title, chapter: chapter || "fallback", wordCount });
         totalWords += wordCount;
 
         if (ref === refs[refs.length - 1]) {
@@ -227,6 +255,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
     }
   }
 });
+
 
 
 // ===================== Search =====================
