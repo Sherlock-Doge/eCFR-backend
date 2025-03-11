@@ -348,16 +348,17 @@ app.get("/api/test-puppeteer", async (req, res) => {
 
 
 
-// ===================== TEMP TEST: /api/test-titlexml-debug/:titleNumber =====================
-app.get("/api/test-titlexml-debug/:titleNumber", async (req, res) => {
+// ===================== TEMP TEST: /api/test-titlexml-dive/:titleNumber =====================
+app.get("/api/test-titlexml-dive/:titleNumber", async (req, res) => {
   const titleNumber = req.params.titleNumber;
   const axios = require("axios");
   const sax = require("sax");
 
   const VERSIONER = "https://www.ecfr.gov/api/versioner/v1";
+  const tagSet = new Set();
+  const breakdowns = [];
 
   try {
-    // Step 1: Get metadata to determine issue date
     const titles = metadataCache.get("titlesMetadata") || [];
     const meta = titles.find(t => t.number.toString() === titleNumber.toString());
     const issueDate = meta?.latest_issue_date;
@@ -366,54 +367,47 @@ app.get("/api/test-titlexml-debug/:titleNumber", async (req, res) => {
     const xmlUrl = `${VERSIONER}/full/${issueDate}/title-${titleNumber}.xml`;
     const response = await axios({ method: "GET", url: xmlUrl, responseType: "stream", timeout: 60000 });
 
-    // Step 2: Parse XML and extract section content + collect all tag types
     const parser = sax.createStream(true);
-    const sections = [];
-    const tagSet = new Set();
 
-    let currentTag = "";
-    let currentIdentifier = "";
+    let currentPart = "";
+    let currentSubpart = "";
     let currentText = "";
+    let currentTag = "";
     let captureText = false;
-    let inSection = false;
 
     parser.on("opentag", node => {
       tagSet.add(node.name);
 
-      if (node.name === "SECTION") {
-        inSection = true;
-        currentIdentifier = node.attributes?.N || "";
-        currentText = "";
-      }
+      // Update hierarchy context
+      if (node.name === "PART") currentPart = node.attributes?.N || "";
+      if (node.name === "SUBPART") currentSubpart = node.attributes?.N || "";
 
-      if (inSection && ["P", "FP", "STARS", "GPOTABLE", "HD"].includes(node.name)) {
+      // Capture actual paragraph-like content
+      if (["P", "FP", "HD", "GPOTABLE"].includes(node.name)) {
         captureText = true;
         currentTag = node.name;
       }
     });
 
     parser.on("text", text => {
-      if (captureText && inSection) {
-        currentText += text.trim() + " ";
-      }
+      if (captureText) currentText += text.trim() + " ";
     });
 
     parser.on("closetag", tagName => {
-      if (inSection && tagName === "SECTION") {
-        inSection = false;
-        captureText = false;
+      if (captureText && tagName === currentTag) {
         const cleanText = currentText.trim();
         const wordCount = cleanText.split(/\s+/).filter(Boolean).length;
-        if (wordCount > 0 && currentIdentifier) {
-          sections.push({
-            section: currentIdentifier,
+
+        if (wordCount > 0) {
+          breakdowns.push({
+            part: currentPart || null,
+            subpart: currentSubpart || null,
             wordCount,
             preview: cleanText.slice(0, 150)
           });
         }
-        currentIdentifier = "";
+
         currentText = "";
-      } else if (captureText && tagName === currentTag) {
         captureText = false;
       }
     });
@@ -427,13 +421,14 @@ app.get("/api/test-titlexml-debug/:titleNumber", async (req, res) => {
       res.json({
         title: `Title ${titleNumber}`,
         uniqueTags: Array.from(tagSet).sort(),
-        sections
+        breakdowns
       });
     });
 
     response.data.pipe(parser);
   } catch (e) {
-    console.error("🚨 /api/test-titlexml-debug error:", e.message);
+    console.error("🚨 /api/test-titlexml-dive error:", e.message);
     res.status(500).json({ error: e.message });
   }
 });
+
