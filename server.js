@@ -97,7 +97,7 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
     }
 });
 
-// Word Count by Agency (HTML scrape)
+// ✅ Word Count by Agency (HTML scrape + breakdowns)
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
     const slug = req.params.slug;
     const agencies = metadataCache.get("agenciesMetadata") || [];
@@ -107,39 +107,45 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
     if (!agency) return res.status(404).json({ error: "Agency not found" });
 
     const refs = agency.cfr_references || [];
-    if (!refs.length) return res.json({ agency: agency.name, wordCount: 0 });
+    if (!refs.length) return res.json({ agency: agency.name, wordCount: 0, breakdowns: [] });
 
     let totalWords = 0;
+    let breakdowns = [];
+
     try {
         for (const ref of refs) {
             const title = ref.title;
-            const chapter = ref.chapter || ref.part || "";
+            const chapter = ref.chapter || ref.part || "N/A";
             const cacheKey = `html-agency-${slug}-title-${title}-chapter-${chapter}`;
-            const cached = wordCountCache.get(cacheKey);
-            if (cached !== undefined) {
+            let words = wordCountCache.get(cacheKey);
+
+            if (words !== undefined) {
                 console.log(`✅ Cache hit: ${cacheKey}`);
-                totalWords += cached;
-                continue;
+            } else {
+                const url = `${BASE_URL}/current/title-${title}/chapter-${chapter}`;
+                console.log(`🌐 Scraping HTML from ${url}`);
+                try {
+                    const response = await axios.get(url, { timeout: 30000 });
+                    const dom = new JSDOM(response.data);
+                    const textContent = dom.window.document.body.textContent || "";
+                    words = textContent.trim().split(/\s+/).filter(Boolean).length;
+                    wordCountCache.set(cacheKey, words);
+                    console.log(`📊 Words counted for Title ${title} Chapter ${chapter}: ${words}`);
+                } catch (err) {
+                    console.warn(`⚠️ Failed to scrape: ${url} – Skipping`);
+                    continue;
+                }
             }
 
-            // Construct ecfr.gov URL
-            const url = `${BASE_URL}/current/title-${title}/chapter-${chapter}`;
-            console.log(`🌐 Scraping HTML from ${url}`);
-            try {
-                const response = await axios.get(url, { timeout: 30000 });
-                const dom = new JSDOM(response.data);
-                const textContent = dom.window.document.body.textContent || "";
-                const words = textContent.trim().split(/\s+/).filter(Boolean).length;
-                wordCountCache.set(cacheKey, words);
-                totalWords += words;
-                console.log(`📊 Words counted: ${words}`);
-            } catch (err) {
-                console.warn(`⚠️ Failed to scrape: ${url} – Skipping`);
-                continue;
-            }
+            breakdowns.push({
+                title,
+                chapter,
+                wordCount: words
+            });
+            totalWords += words;
         }
 
-        res.json({ agency: agency.name, wordCount: totalWords });
+        res.json({ agency: agency.name, total: totalWords, breakdowns });
     } catch (e) {
         console.error("🚨 HTML Agency Word Count Error:", e.message);
         res.status(500).json({ error: "Failed to calculate agency word count" });
