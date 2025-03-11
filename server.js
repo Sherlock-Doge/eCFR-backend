@@ -1,9 +1,10 @@
-// eCFR Analyzer Backend – FINAL FIXED URL BUILDER + STRUCTURE MATCHING ✅
+// eCFR Analyzer Backend – FINAL FIXED VERSION ✅ Puppeteer-Core + Chromium.path
 const express = require("express");
 const axios = require("axios");
 const { JSDOM } = require("jsdom");
 const NodeCache = require("node-cache");
 const puppeteer = require("puppeteer-core");
+const chromium = require("chromium");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -108,7 +109,7 @@ async function streamAndCountWords(url) {
   }
 }
 
-// ===================== Word Count by Agency (Fixed URL Builder) =====================
+// ===================== Word Count by Agency (Chromium.path based) =====================
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
   const slug = req.params.slug;
   const agencies = metadataCache.get("agenciesMetadata") || [];
@@ -126,8 +127,10 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
   try {
     const browser = await puppeteer.launch({
       headless: "new",
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || "/usr/bin/chromium-browser"
+      executablePath: chromium.path,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
+
     const page = await browser.newPage();
 
     for (const ref of refs) {
@@ -153,7 +156,6 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
 
         function recurse(node, path = []) {
           const updatedPath = [...path];
-
           if (node.type === "chapter") updatedPath.push(`chapter-${node.identifier}`);
           if (node.type === "subchapter") updatedPath.push(`subchapter-${node.identifier}`);
           if (node.type === "part") updatedPath.push(`part-${node.identifier}`);
@@ -163,12 +165,12 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
             const url = `${BASE_URL}/current/title-${title}/${updatedPath.join("/")}`;
             sectionUrls.push(url);
           }
-
           if (node.children) node.children.forEach(child => recurse(child, updatedPath));
         }
+
         recurse(structure);
 
-        console.log(`🔍 Found ${sectionUrls.length} real section URLs for Title ${title}, Chapter ${chapter}`);
+        console.log(`🔍 Found ${sectionUrls.length} section URLs for Title ${title}, Chapter ${chapter}`);
 
         words = 0;
         for (const url of sectionUrls) {
