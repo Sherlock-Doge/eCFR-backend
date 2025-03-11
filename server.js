@@ -349,3 +349,46 @@ app.get("/api/test-agency-chapter-structure/:title/:chapter", async (req, res) =
 });
 
 
+// ===================== DEBUG STRUCTURE TREE: /api/debug-structure/:titleNumber =====================
+app.get("/api/debug-structure/:titleNumber", async (req, res) => {
+  const titleNumber = req.params.titleNumber;
+  const titles = metadataCache.get("titlesMetadata") || [];
+  const meta = titles.find(t => t.number.toString() === titleNumber.toString());
+  if (!meta || !meta.latest_issue_date) {
+    return res.status(400).json({ error: "Invalid or missing title metadata" });
+  }
+
+  const structureUrl = `${VERSIONER}/structure/${meta.latest_issue_date}/title-${titleNumber}.json`;
+
+  try {
+    const response = await axios.get(structureUrl);
+    const root = response.data;
+
+    const nodes = [];
+
+    function traverse(node, path = []) {
+      const currentPath = [...path, `${node.type}(${node.identifier || "?"})`];
+      nodes.push({
+        type: node.type,
+        identifier: node.identifier || null,
+        path: currentPath.join(" → ")
+      });
+
+      if (node.children && Array.isArray(node.children)) {
+        node.children.forEach(child => traverse(child, currentPath));
+      }
+    }
+
+    traverse(root);
+
+    res.json({
+      title: `Title ${titleNumber}`,
+      totalNodes: nodes.length,
+      nodes
+    });
+  } catch (err) {
+    console.error("🚨 DEBUG STRUCTURE error:", err.message);
+    res.status(500).json({ error: "Failed to fetch or parse structure JSON" });
+  }
+});
+
