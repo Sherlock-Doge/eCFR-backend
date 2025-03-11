@@ -1,6 +1,6 @@
 {
   "name": "ecfr-backend",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Backend service to fetch eCFR API data with title-level word count functionality",
   "main": "server.js",
   "dependencies": {
@@ -10,7 +10,7 @@
     "node-cache": "^5.1.2",
     "jsdom": "^24.0.0",
     "sax": "^1.2.4",
-    "puppeteer": "^21.3.8"
+    "puppeteer-core": "^21.3.8"
   },
   "scripts": {
     "start": "node server.js"
