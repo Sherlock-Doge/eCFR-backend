@@ -1,9 +1,10 @@
-// eCFR Analyzer Backend – Optimized Puppeteer Word Count (Fetch & Release Model ✅)
+// eCFR Analyzer Backend – Optimized Puppeteer Word Count (Chromium-path Integration ✅)
 const express = require("express");
 const axios = require("axios");
 const { JSDOM } = require("jsdom");
 const NodeCache = require("node-cache");
-const puppeteer = require("puppeteer");
+const puppeteer = require("puppeteer-core");
+const chromium = require("chromium");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -108,7 +109,7 @@ async function streamAndCountWords(url) {
   }
 }
 
-// ===================== Word Count by Agency (Optimized Puppeteer Scraper) =====================
+// ===================== Word Count by Agency (Chromium-based Puppeteer) =====================
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
   const slug = req.params.slug;
   const agencies = metadataCache.get("agenciesMetadata") || [];
@@ -123,10 +124,10 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
   let totalWords = 0;
   const breakdowns = [];
 
-    try {
+  try {
     const browser = await puppeteer.launch({
       headless: "new",
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || "/usr/bin/chromium-browser"
+      executablePath: chromium.path
     });
     const page = await browser.newPage();
 
