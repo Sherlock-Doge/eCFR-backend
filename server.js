@@ -104,6 +104,8 @@ async function streamAndCountWords(url) {
 // ===================== Word Count by Agency (XML-based scoped version) =====================
 
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
+  const sax = require("sax");
+
   const slug = req.params.slug;
   const agencies = metadataCache.get("agenciesMetadata") || [];
   const agency = agencies.find(
@@ -135,60 +137,80 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
       const issueDate = meta?.latest_issue_date;
       if (!issueDate) continue;
 
+      // STEP 1: Structure JSON traversal → collect section identifiers
+      const structureUrl = `${VERSIONER}/structure/${issueDate}/title-${title}.json`;
+      const structure = (await axios.get(structureUrl)).data;
+
+      const sectionSet = new Set();
+      let inChapter = false;
+
+      const recurse = (node, inScope = false) => {
+        if (node.type === "chapter" && node.identifier === chapter) inScope = true;
+        if (inScope && node.type === "section") sectionSet.add(node.identifier);
+        if (node.children) node.children.forEach((child) => recurse(child, inScope));
+      };
+
+      recurse(structure);
+
+      if (!sectionSet.size) {
+        console.warn(`⚠️ No sections found for Title ${title}, Chapter ${chapter}`);
+        breakdowns.push({ title, chapter, wordCount: 0 });
+        continue;
+      }
+
+      // STEP 2: Stream XML and collect word count for those sections
       const xmlUrl = `${VERSIONER}/full/${issueDate}/title-${title}.xml`;
       const response = await axios({ method: "GET", url: xmlUrl, responseType: "stream", timeout: 60000 });
-
       const parser = sax.createStream(true);
 
-      let insideChapter = false;
-      let currentText = "";
-      let currentTag = "";
+      let currentSection = null;
       let captureText = false;
-      const hierarchyStack = [];
+      let currentText = "";
+      let wordCount = 0;
+      const stack = [];
 
       parser.on("opentag", (node) => {
         const { name, attributes } = node;
 
-        // Track hierarchy
         if (name.startsWith("DIV") && attributes.TYPE && attributes.N) {
-          hierarchyStack.push({ type: attributes.TYPE.toLowerCase(), number: attributes.N });
+          stack.push({ type: attributes.TYPE.toLowerCase(), number: attributes.N });
 
-          if (attributes.TYPE.toLowerCase() === "chapter" && attributes.N === chapter) {
-            insideChapter = true;
+          if (attributes.TYPE.toLowerCase() === "section" && sectionSet.has(attributes.N)) {
+            currentSection = attributes.N;
           }
         }
 
-        if (insideChapter && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(name)) {
+        if (currentSection && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(name)) {
           captureText = true;
-          currentTag = name;
         }
       });
 
       parser.on("text", (text) => {
-        if (captureText && insideChapter) {
+        if (captureText && currentSection) {
           currentText += text.trim() + " ";
         }
       });
 
       parser.on("closetag", (tag) => {
-        if (captureText && tag === currentTag) {
+        if (captureText && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(tag)) {
           captureText = false;
-          currentTag = "";
         }
 
-        if (tag.startsWith("DIV") && hierarchyStack.length > 0) {
-          const popped = hierarchyStack.pop();
-          if (popped.type === "chapter" && popped.number === chapter) {
-            insideChapter = false;
+        if (tag.startsWith("DIV") && stack.length > 0) {
+          const popped = stack.pop();
+          if (popped.type === "section" && popped.number === currentSection) {
+            wordCount += currentText.trim().split(/\s+/).filter(Boolean).length;
+            currentSection = null;
+            currentText = "";
           }
         }
       });
 
       parser.on("end", () => {
-        const scopedWords = currentText.trim().split(/\s+/).filter(Boolean).length;
-        wordCountCache.set(cacheKey, scopedWords);
-        breakdowns.push({ title, chapter, wordCount: scopedWords });
-        totalWords += scopedWords;
+        wordCountCache.set(cacheKey, wordCount);
+        breakdowns.push({ title, chapter, wordCount });
+        totalWords += wordCount;
+
         if (ref === refs[refs.length - 1]) {
           res.json({ agency: agency.name, total: totalWords, breakdowns });
         }
@@ -205,6 +227,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
     }
   }
 });
+
 
 // ===================== Search =====================
 app.get("/api/search", async (req, res) => {
