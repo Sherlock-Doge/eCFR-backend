@@ -282,3 +282,70 @@ app.get("/api/search/suggestions", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 eCFR Analyzer server running on port ${PORT}`);
 });
+
+
+
+// ===================== TEST: Full Agency Chapter Structure Walker =====================
+app.get("/api/test-agency-chapter-structure/:title/:chapter", async (req, res) => {
+  const titleNumber = req.params.title;
+  const chapterId = req.params.chapter;
+  const results = [];
+  const visitedNodes = new Set();
+  const axios = require("axios");
+
+  try {
+    const titles = metadataCache.get("titlesMetadata") || [];
+    const meta = titles.find(t => t.number.toString() === titleNumber.toString());
+    const issueDate = meta?.latest_issue_date;
+    if (!issueDate) return res.status(400).json({ error: "Missing issue date for title" });
+
+    const structureUrl = `${VERSIONER}/structure/${issueDate}/title-${titleNumber}.json`;
+    const structure = (await axios.get(structureUrl)).data;
+
+    // Recursive walk function
+    function walk(node, path = []) {
+      if (!node || visitedNodes.has(node.identifier)) return;
+      visitedNodes.add(node.identifier);
+
+      const updatedPath = [...path];
+      if (node.type === "chapter") updatedPath.push(`Chapter ${node.identifier}`);
+      else if (node.type === "subchapter") updatedPath.push(`Subchapter ${node.identifier}`);
+      else if (node.type === "part") updatedPath.push(`Part ${node.identifier}`);
+      else if (node.type === "subpart") updatedPath.push(`Subpart ${node.identifier}`);
+      else if (node.type === "section") {
+        updatedPath.push(`Section ${node.identifier}`);
+        results.push({ path: updatedPath.join(" → "), type: "section" });
+        return;
+      }
+
+      if (["chapter", "subchapter", "part", "subpart"].includes(node.type)) {
+        results.push({ path: updatedPath.join(" → "), type: node.type });
+      }
+
+      if (node.children && Array.isArray(node.children)) {
+        node.children.forEach(child => walk(child, updatedPath));
+      }
+    }
+
+    // Start from matching chapter root
+    const chapterNode = structure.children?.find(child =>
+      child.type === "chapter" && child.identifier === chapterId
+    );
+    if (!chapterNode) return res.status(404).json({ error: `Chapter ${chapterId} not found in Title ${titleNumber}` });
+
+    walk(chapterNode);
+
+    return res.json({
+      title: `Title ${titleNumber}`,
+      chapter: chapterId,
+      nodeCount: results.length,
+      structure: results
+    });
+
+  } catch (e) {
+    console.error("🚨 Chapter Structure Test Error:", e.message);
+    return res.status(500).json({ error: "Structure parsing error" });
+  }
+});
+
+
