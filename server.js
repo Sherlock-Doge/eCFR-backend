@@ -101,13 +101,14 @@ async function streamAndCountWords(url) {
   }
 }
 
-// ========== Word Count by Agency (XML-based scoped version) ==========
+// ===================== Word Count by Agency (XML-based scoped version) =====================
+const sax = require("sax");
 
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
   const slug = req.params.slug;
   const agencies = metadataCache.get("agenciesMetadata") || [];
-  const agency = agencies.find(a =>
-    a.slug === slug || a.name.toLowerCase().replace(/\s+/g, "-") === slug
+  const agency = agencies.find(
+    (a) => a.slug === slug || a.name.toLowerCase().replace(/\s+/g, "-") === slug
   );
   if (!agency) return res.status(404).json({ error: "Agency not found" });
 
@@ -121,17 +122,17 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
     const title = ref.title;
     const chapter = ref.chapter;
     const cacheKey = `agency-scope-${slug}-title-${title}-chapter-${chapter}`;
-    let scopedCount = wordCountCache.get(cacheKey);
+    let cachedCount = wordCountCache.get(cacheKey);
 
-    if (scopedCount !== undefined) {
-      breakdowns.push({ title, chapter, wordCount: scopedCount });
-      totalWords += scopedCount;
+    if (cachedCount !== undefined) {
+      breakdowns.push({ title, chapter, wordCount: cachedCount });
+      totalWords += cachedCount;
       continue;
     }
 
     try {
       const titles = metadataCache.get("titlesMetadata") || [];
-      const meta = titles.find(t => t.number.toString() === title.toString());
+      const meta = titles.find((t) => t.number.toString() === title.toString());
       const issueDate = meta?.latest_issue_date;
       if (!issueDate) continue;
 
@@ -139,65 +140,69 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
       const response = await axios({ method: "GET", url: xmlUrl, responseType: "stream", timeout: 60000 });
 
       const parser = sax.createStream(true);
-      let inScope = false;
-      let currentText = "";
-      let wordCount = 0;
-      let capture = false;
-      const hierarchy = [];
 
-      parser.on("opentag", node => {
+      let insideChapter = false;
+      let currentText = "";
+      let currentTag = "";
+      let captureText = false;
+      const hierarchyStack = [];
+
+      parser.on("opentag", (node) => {
         const { name, attributes } = node;
+
+        // Track hierarchy
         if (name.startsWith("DIV") && attributes.TYPE && attributes.N) {
-          hierarchy.push({ type: attributes.TYPE.toLowerCase(), number: attributes.N });
+          hierarchyStack.push({ type: attributes.TYPE.toLowerCase(), number: attributes.N });
 
           if (attributes.TYPE.toLowerCase() === "chapter" && attributes.N === chapter) {
-            inScope = true;
+            insideChapter = true;
           }
         }
-        if (inScope && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(name)) {
-          capture = true;
+
+        if (insideChapter && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(name)) {
+          captureText = true;
+          currentTag = name;
         }
       });
 
-      parser.on("text", text => {
-        if (capture && inScope) {
+      parser.on("text", (text) => {
+        if (captureText && insideChapter) {
           currentText += text.trim() + " ";
         }
       });
 
-      parser.on("closetag", tag => {
-        if (capture && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(tag)) {
-          capture = false;
+      parser.on("closetag", (tag) => {
+        if (captureText && tag === currentTag) {
+          captureText = false;
+          currentTag = "";
         }
 
-        if (tag.startsWith("DIV") && hierarchy.length) {
-          const popped = hierarchy.pop();
+        if (tag.startsWith("DIV") && hierarchyStack.length > 0) {
+          const popped = hierarchyStack.pop();
           if (popped.type === "chapter" && popped.number === chapter) {
-            inScope = false;
+            insideChapter = false;
           }
         }
       });
 
       parser.on("end", () => {
-        const words = currentText.trim().split(/\s+/).filter(Boolean).length;
-        wordCount = words;
-        wordCountCache.set(cacheKey, wordCount);
-        breakdowns.push({ title, chapter, wordCount });
-        totalWords += wordCount;
-
+        const scopedWords = currentText.trim().split(/\s+/).filter(Boolean).length;
+        wordCountCache.set(cacheKey, scopedWords);
+        breakdowns.push({ title, chapter, wordCount: scopedWords });
+        totalWords += scopedWords;
         if (ref === refs[refs.length - 1]) {
           res.json({ agency: agency.name, total: totalWords, breakdowns });
         }
       });
 
-      parser.on("error", err => {
-        console.error("Agency XML parse error:", err.message);
-        res.status(500).json({ error: "XML parsing error" });
+      parser.on("error", (err) => {
+        console.error(`🚨 XML parse error for agency ${agency.name}:`, err.message);
+        res.status(500).json({ error: "XML parse error" });
       });
 
       response.data.pipe(parser);
     } catch (e) {
-      console.error("Agency XML error:", e.message);
+      console.error(`🚨 Error processing agency ${agency.name}:`, e.message);
     }
   }
 });
