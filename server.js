@@ -1,4 +1,3 @@
-// eCFR Analyzer Backend – FINAL XML-PARSED VERSION (NO PUPPETEER)
 const express = require("express");
 const axios = require("axios");
 const NodeCache = require("node-cache");
@@ -21,7 +20,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// ===================== Titles Endpoint =====================
+// ========== Titles ==========
+
 app.get("/api/titles", async (req, res) => {
   try {
     let cachedTitles = metadataCache.get("titlesMetadata");
@@ -38,12 +38,12 @@ app.get("/api/titles", async (req, res) => {
     }
     res.json({ titles: cachedTitles });
   } catch (e) {
-    console.error("🚨 Titles error:", e.message);
     res.status(500).json({ error: "Failed to fetch titles" });
   }
 });
 
-// ===================== Agencies Endpoint =====================
+// ========== Agencies ==========
+
 app.get("/api/agencies", async (req, res) => {
   try {
     const response = await axios.get(`${ADMIN}/agencies.json`);
@@ -51,12 +51,12 @@ app.get("/api/agencies", async (req, res) => {
     metadataCache.set("agenciesMetadata", agencies);
     res.json({ agencies });
   } catch (e) {
-    console.error("🚨 Agencies error:", e.message);
     res.status(500).json({ error: "Failed to fetch agencies" });
   }
 });
 
-// ===================== Word Count by Title =====================
+// ========== Word Count by Title ==========
+
 app.get("/api/wordcount/:titleNumber", async (req, res) => {
   const titleNumber = req.params.titleNumber;
   const cacheKey = `wordCount-${titleNumber}`;
@@ -65,20 +65,44 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
 
   try {
     const titles = metadataCache.get("titlesMetadata") || [];
-    const meta = titles.find(t => t.number.toString() === titleNumber);
-    if (!meta || meta.name === "Reserved") return res.json({ title: titleNumber, wordCount: 0 });
+    const meta = titles.find(t => t.number.toString() === titleNumber.toString());
+    const issueDate = meta?.latest_issue_date;
+    if (!issueDate) return res.json({ title: titleNumber, wordCount: 0 });
 
-    const xmlUrl = `${VERSIONER}/full/${meta.latest_issue_date}/title-${titleNumber}.xml`;
+    const xmlUrl = `${VERSIONER}/full/${issueDate}/title-${titleNumber}.xml`;
     const wordCount = await streamAndCountWords(xmlUrl);
     wordCountCache.set(cacheKey, wordCount);
     res.json({ title: titleNumber, wordCount });
   } catch (e) {
-    console.error("🚨 Title Word Count Error:", e.message);
     res.status(500).json({ error: "Failed to count words" });
   }
 });
 
-// ===================== Word Count by Agency (XML-based) =====================
+async function streamAndCountWords(url) {
+  try {
+    const response = await axios({ method: "GET", url, responseType: "stream", timeout: 60000 });
+    let wordCount = 0, buffer = "";
+
+    return new Promise((resolve, reject) => {
+      response.data.on("data", chunk => {
+        buffer += chunk.toString();
+        const words = buffer.split(/\s+/);
+        wordCount += words.length - 1;
+        buffer = words.pop();
+      });
+      response.data.on("end", () => {
+        if (buffer.length) wordCount++;
+        resolve(wordCount);
+      });
+      response.data.on("error", reject);
+    });
+  } catch {
+    return 0;
+  }
+}
+
+// ========== Word Count by Agency (XML-based scoped version) ==========
+
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
   const slug = req.params.slug;
   const agencies = metadataCache.get("agenciesMetadata") || [];
@@ -93,59 +117,90 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
   let totalWords = 0;
   const breakdowns = [];
 
-  try {
-    for (const ref of refs) {
-      const title = ref.title;
-      const chapter = ref.chapter || "N/A";
-      const cacheKey = `agency-words-${slug}-title-${title}-chapter-${chapter}`;
-      let words = wordCountCache.get(cacheKey);
+  for (const ref of refs) {
+    const title = ref.title;
+    const chapter = ref.chapter;
+    const cacheKey = `agency-scope-${slug}-title-${title}-chapter-${chapter}`;
+    let scopedCount = wordCountCache.get(cacheKey);
 
-      if (words !== undefined) {
-        console.log(`✅ Cache hit: ${cacheKey}`);
-      } else {
-        const titles = metadataCache.get("titlesMetadata") || [];
-        const meta = titles.find(t => t.number === title || t.number.toString() === title.toString());
-        const issueDate = meta?.latest_issue_date;
-        if (!issueDate) continue;
-
-        const xmlUrl = `${VERSIONER}/full/${issueDate}/title-${title}.xml`;
-        words = await streamAndCountWords(xmlUrl);
-        wordCountCache.set(cacheKey, words);
-      }
-
-      breakdowns.push({ title, chapter, wordCount: words });
-      totalWords += words;
+    if (scopedCount !== undefined) {
+      breakdowns.push({ title, chapter, wordCount: scopedCount });
+      totalWords += scopedCount;
+      continue;
     }
 
-    res.json({ agency: agency.name, total: totalWords, breakdowns });
-  } catch (e) {
-    console.error("🚨 Agency XML error:", e.message);
-    res.status(500).json({ error: "Failed to process agency content" });
+    try {
+      const titles = metadataCache.get("titlesMetadata") || [];
+      const meta = titles.find(t => t.number.toString() === title.toString());
+      const issueDate = meta?.latest_issue_date;
+      if (!issueDate) continue;
+
+      const xmlUrl = `${VERSIONER}/full/${issueDate}/title-${title}.xml`;
+      const response = await axios({ method: "GET", url: xmlUrl, responseType: "stream", timeout: 60000 });
+
+      const parser = sax.createStream(true);
+      let inScope = false;
+      let currentText = "";
+      let wordCount = 0;
+      let capture = false;
+      const hierarchy = [];
+
+      parser.on("opentag", node => {
+        const { name, attributes } = node;
+        if (name.startsWith("DIV") && attributes.TYPE && attributes.N) {
+          hierarchy.push({ type: attributes.TYPE.toLowerCase(), number: attributes.N });
+
+          if (attributes.TYPE.toLowerCase() === "chapter" && attributes.N === chapter) {
+            inScope = true;
+          }
+        }
+        if (inScope && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(name)) {
+          capture = true;
+        }
+      });
+
+      parser.on("text", text => {
+        if (capture && inScope) {
+          currentText += text.trim() + " ";
+        }
+      });
+
+      parser.on("closetag", tag => {
+        if (capture && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(tag)) {
+          capture = false;
+        }
+
+        if (tag.startsWith("DIV") && hierarchy.length) {
+          const popped = hierarchy.pop();
+          if (popped.type === "chapter" && popped.number === chapter) {
+            inScope = false;
+          }
+        }
+      });
+
+      parser.on("end", () => {
+        const words = currentText.trim().split(/\s+/).filter(Boolean).length;
+        wordCount = words;
+        wordCountCache.set(cacheKey, wordCount);
+        breakdowns.push({ title, chapter, wordCount });
+        totalWords += wordCount;
+
+        if (ref === refs[refs.length - 1]) {
+          res.json({ agency: agency.name, total: totalWords, breakdowns });
+        }
+      });
+
+      parser.on("error", err => {
+        console.error("Agency XML parse error:", err.message);
+        res.status(500).json({ error: "XML parsing error" });
+      });
+
+      response.data.pipe(parser);
+    } catch (e) {
+      console.error("Agency XML error:", e.message);
+    }
   }
 });
-
-// ===================== Stream XML Word Count Utility =====================
-async function streamAndCountWords(url) {
-  try {
-    const response = await axios({ method: "GET", url, responseType: "stream", timeout: 60000 });
-    let wordCount = 0;
-    const parser = sax.createStream(true);
-
-    parser.on("text", text => {
-      const words = text.trim().split(/\s+/).filter(Boolean);
-      wordCount += words.length;
-    });
-
-    return new Promise((resolve, reject) => {
-      parser.on("end", () => resolve(wordCount));
-      parser.on("error", reject);
-      response.data.pipe(parser);
-    });
-  } catch (e) {
-    console.error("🚨 XML Stream error:", e.message);
-    return 0;
-  }
-}
 
 // ===================== Search =====================
 app.get("/api/search", async (req, res) => {
@@ -180,16 +235,20 @@ app.get("/api/search/suggestions", async (req, res) => {
 
     const titles = metadataCache.get("titlesMetadata") || [];
     const agencies = metadataCache.get("agenciesMetadata") || [];
-    const suggestions = [
-      ...titles.filter(t => t.name.toLowerCase().includes(query)).map(t => `Title ${t.number}: ${t.name}`),
-      ...agencies.filter(a => a.name.toLowerCase().includes(query)).map(a => a.name)
-    ];
+    let suggestions = [];
 
-    const unique = [...new Set(suggestions)].slice(0, 10);
-    suggestionCache.set(cacheKey, unique);
-    res.json({ suggestions: unique });
+    titles.forEach(t => {
+      if (t.name.toLowerCase().includes(query)) suggestions.push(`Title ${t.number}: ${t.name}`);
+    });
+    agencies.forEach(a => {
+      if (a.name.toLowerCase().includes(query)) suggestions.push(a.name);
+    });
+
+    suggestions = [...new Set(suggestions)].slice(0, 10);
+    suggestionCache.set(cacheKey, suggestions);
+    res.json({ suggestions });
   } catch (e) {
-    console.error("🚨 Suggestions error:", e.message);
+    console.error("🚨 Suggestion error:", e.message);
     res.status(500).json({ suggestions: [] });
   }
 });
@@ -209,14 +268,13 @@ app.get("/api/search/suggestions", async (req, res) => {
     const agenciesRes = await axios.get(`${ADMIN}/agencies.json`);
     const agencies = agenciesRes.data.agencies || agenciesRes.data;
     metadataCache.set("agenciesMetadata", agencies);
-
-    console.log("✅ Metadata preload complete");
+    console.log("✅ Metadata preload complete.");
   } catch (e) {
-    console.error("🚨 Metadata preload error:", e.message);
+    console.error("🚨 Metadata preload failed:", e.message);
   }
 })();
 
 // ===================== Start Server =====================
 app.listen(PORT, () => {
-  console.log(`🚀 eCFR Analyzer running on port ${PORT}`);
+  console.log(`🚀 eCFR Analyzer server running on port ${PORT}`);
 });
