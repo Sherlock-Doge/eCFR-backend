@@ -123,8 +123,11 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
   let totalWords = 0;
   const breakdowns = [];
 
-  try {
-    const browser = await puppeteer.launch({ headless: "new" });
+    try {
+    const browser = await puppeteer.launch({
+      headless: "new",
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || "/usr/bin/chromium-browser"
+    });
     const page = await browser.newPage();
 
     for (const ref of refs) {
