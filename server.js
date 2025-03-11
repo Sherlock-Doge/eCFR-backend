@@ -1,4 +1,4 @@
-// eCFR Analyzer Backend – FINAL STRUCTURE-DRIVEN WORD COUNT IMPLEMENTATION
+// eCFR Analyzer Backend – FINAL STRUCTURE-DRIVEN WORD COUNT IMPLEMENTATION (LOGGING+SCRAPER FIXED)
 const express = require("express");
 const axios = require("axios");
 const { JSDOM } = require("jsdom");
@@ -107,7 +107,7 @@ async function streamAndCountWords(url) {
   }
 }
 
-// ===================== Word Count by Agency (Structure-Driven) =====================
+// ===================== Word Count by Agency (Structure-Driven + Enhanced Logs) =====================
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
   const slug = req.params.slug;
   const agencies = metadataCache.get("agenciesMetadata") || [];
@@ -132,7 +132,6 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
       if (words !== undefined) {
         console.log(`✅ Cache hit: ${cacheKey}`);
       } else {
-        // Pull structure JSON for the title
         const titles = metadataCache.get("titlesMetadata") || [];
         const meta = titles.find(t => t.number === title || t.number.toString() === title.toString());
         const issueDate = meta?.latest_issue_date;
@@ -145,7 +144,6 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
         const structure = (await axios.get(structureUrl)).data;
         const sectionUrls = [];
 
-        // Recursive section URL builder (only for matching chapters)
         function recurse(node, path = []) {
           const currentPath = [...path, node.identifier];
           if (node.type === "section" && currentPath.includes(chapter)) {
@@ -163,12 +161,26 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
           try {
             const html = await axios.get(url, { timeout: 30000 });
             const dom = new JSDOM(html.data);
-            const content = dom.window.document.querySelector("main")?.textContent || "";
-            const count = content.trim().split(/\s+/).filter(Boolean).length;
+            let content = dom.window.document.querySelector("main")?.textContent?.trim() || "";
+
+            // ⛑ Fallback: try alternative containers
+            if (!content || content.length < 50) {
+              content = dom.window.document.querySelector("#content")?.textContent?.trim() || "";
+            }
+            if (!content || content.length < 50) {
+              content = dom.window.document.querySelector("#primary-content")?.textContent?.trim() || "";
+            }
+
+            const count = content.split(/\s+/).filter(Boolean).length;
             words += count;
+
+            if (!count || content.length < 10) {
+              console.warn(`⚠️ Scraped zero/empty content at ${url}`);
+            }
+
             console.log(`📄 ${url} → ${count} words`);
           } catch (err) {
-            console.warn(`⚠️ Failed section scrape: ${url}`);
+            console.warn(`❌ Failed to scrape section: ${url} → ${err.message}`);
           }
         }
 
