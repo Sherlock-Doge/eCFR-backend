@@ -348,76 +348,80 @@ app.get("/api/test-puppeteer", async (req, res) => {
 
 
 
-// ===================== TEMP TEST: /api/test-titlexml/:titleNumber =====================
-app.get("/api/test-titlexml/:titleNumber", async (req, res) => {
+// ===================== TEMP TEST: /api/test-titlexml-debug/:titleNumber =====================
+app.get("/api/test-titlexml-debug/:titleNumber", async (req, res) => {
+  const titleNumber = req.params.titleNumber;
   const axios = require("axios");
   const sax = require("sax");
-  const titleNumber = req.params.titleNumber;
+
   const VERSIONER = "https://www.ecfr.gov/api/versioner/v1";
 
   try {
-    // Get latest issue date first
-    const metaRes = await axios.get(`${VERSIONER}/titles.json`);
-    const titleMeta = metaRes.data.titles.find(t => t.number.toString() === titleNumber.toString());
-    if (!titleMeta) return res.status(404).json({ error: "Title not found" });
+    // Step 1: Get metadata to determine issue date
+    const titles = metadataCache.get("titlesMetadata") || [];
+    const meta = titles.find(t => t.number.toString() === titleNumber.toString());
+    const issueDate = meta?.latest_issue_date;
+    if (!issueDate) return res.status(400).json({ error: "Missing issue date for title" });
 
-    const xmlUrl = `${VERSIONER}/full/${titleMeta.latest_issue_date}/title-${titleNumber}.xml`;
-    const response = await axios({ method: "GET", url: xmlUrl, responseType: "stream" });
+    const xmlUrl = `${VERSIONER}/full/${issueDate}/title-${titleNumber}.xml`;
+    const response = await axios({ method: "GET", url: xmlUrl, responseType: "stream", timeout: 60000 });
 
-    let currentSection = null;
+    // Step 2: Parse and extract section-level content
+    const parser = sax.createStream(true);
+    const sections = [];
+
+    let currentTag = "";
+    let currentIdentifier = "";
     let currentText = "";
-    const results = [];
-
-    const parser = sax.createStream(true, { trim: true });
+    let captureText = false;
+    let inSection = false;
 
     parser.on("opentag", node => {
       if (node.name === "SECTION") {
-        currentSection = { identifier: node.attributes?.IDENTIFIER || "", subject: "", content: "" };
+        inSection = true;
+        currentIdentifier = node.attributes?.N || "";
+        currentText = "";
       }
-      if (node.name === "SUBJECT" && currentSection) currentText = "";
-      if (node.name === "P" && currentSection) currentText = "";
+      if (inSection && (node.name === "P" || node.name === "STARS" || node.name === "FP" || node.name === "GPOTABLE")) {
+        captureText = true;
+        currentTag = node.name;
+      }
     });
 
     parser.on("text", text => {
-      if (currentSection && currentText !== null) {
-        currentText += text + " ";
+      if (captureText && inSection) {
+        currentText += text.trim() + " ";
       }
     });
 
-    parser.on("closetag", tag => {
-      if (!currentSection) return;
-      if (tag === "SUBJECT") {
-        currentSection.subject = currentText.trim();
-      }
-      if (tag === "P") {
-        currentSection.content += currentText.trim() + " ";
-      }
-      if (tag === "SECTION") {
-        const wordCount = currentSection.content.split(/\s+/).filter(Boolean).length;
-        results.push({
-          section: currentSection.identifier,
-          title: currentSection.subject,
-          wordCount
-        });
-        currentSection = null;
+    parser.on("closetag", tagName => {
+      if (inSection && tagName === "SECTION") {
+        inSection = false;
+        captureText = false;
+        const cleanText = currentText.trim();
+        const wordCount = cleanText.split(/\s+/).filter(Boolean).length;
+        if (wordCount > 0 && currentIdentifier) {
+          sections.push({ section: currentIdentifier, wordCount, preview: cleanText.slice(0, 150) });
+        }
+        currentIdentifier = "";
         currentText = "";
+      } else if (captureText && tagName === currentTag) {
+        captureText = false;
       }
     });
 
     parser.on("error", err => {
-      console.error("❌ SAX parser error:", err.message);
-      res.status(500).json({ error: "Parsing failed" });
+      console.error("🚨 XML parse error:", err.message);
+      res.status(500).json({ error: "XML parse error" });
     });
 
     parser.on("end", () => {
-      res.json({ title: `Title ${titleNumber}`, sections: results });
+      res.json({ title: `Title ${titleNumber}`, sections });
     });
 
     response.data.pipe(parser);
   } catch (e) {
-    console.error("🚨 /api/test-titlexml error:", e.message);
+    console.error("🚨 /api/test-titlexml-debug error:", e.message);
     res.status(500).json({ error: e.message });
   }
 });
-
-
