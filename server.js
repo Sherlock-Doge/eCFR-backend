@@ -432,3 +432,87 @@ app.get("/api/test-titlexml-dive/:titleNumber", async (req, res) => {
   }
 });
 
+// ===================== TEMP TEST: Hierarchical XML Section Debug =====================
+app.get("/api/test-titlexml-fullsection/:titleNumber/:sectionNumber", async (req, res) => {
+  const titleNumber = req.params.titleNumber;
+  const targetSection = req.params.sectionNumber; // e.g., "301.1"
+  const axios = require("axios");
+  const sax = require("sax");
+
+  const VERSIONER = "https://www.ecfr.gov/api/versioner/v1";
+
+  try {
+    const titles = metadataCache.get("titlesMetadata") || [];
+    const meta = titles.find(t => t.number.toString() === titleNumber.toString());
+    const issueDate = meta?.latest_issue_date;
+    if (!issueDate) return res.status(400).json({ error: "Missing issue date for title" });
+
+    const xmlUrl = `${VERSIONER}/full/${issueDate}/title-${titleNumber}.xml`;
+    const response = await axios({ method: "GET", url: xmlUrl, responseType: "stream", timeout: 60000 });
+
+    const parser = sax.createStream(true);
+    let hierarchyStack = [];
+    let captureText = false;
+    let currentText = "";
+    let inTargetSection = false;
+
+    parser.on("opentag", node => {
+      const { name, attributes } = node;
+
+      // Maintain hierarchy stack
+      if (/^DIV/.test(name) && attributes.TYPE && attributes.N) {
+        hierarchyStack.push({ type: attributes.TYPE, number: attributes.N });
+
+        // Check if this DIV is the exact target section
+        if (attributes.TYPE === "section" && attributes.N === targetSection) {
+          inTargetSection = true;
+          currentText = "";
+        }
+      }
+
+      if (inTargetSection && ["P", "FP", "HD", "HEAD"].includes(name)) {
+        captureText = true;
+      }
+    });
+
+    parser.on("text", text => {
+      if (captureText && inTargetSection) {
+        currentText += text.trim() + " ";
+      }
+    });
+
+    parser.on("closetag", tagName => {
+      if (inTargetSection && /^DIV/.test(tagName)) {
+        const popped = hierarchyStack.pop();
+        if (popped.type === "section" && popped.number === targetSection) {
+          inTargetSection = false;
+        }
+      }
+
+      if (captureText && ["P", "FP", "HD", "HEAD"].includes(tagName)) {
+        captureText = false;
+      }
+    });
+
+    parser.on("end", () => {
+      const cleanText = currentText.trim();
+      res.json({
+        hierarchy: hierarchyStack,
+        title: `Title ${titleNumber}`,
+        section: targetSection,
+        wordCount: cleanText.split(/\s+/).filter(Boolean).length,
+        contentPreview: cleanText
+      });
+    });
+
+    parser.on("error", err => {
+      console.error("🚨 XML parse error:", err.message);
+      res.status(500).json({ error: "XML parse error" });
+    });
+
+    response.data.pipe(parser);
+  } catch (e) {
+    console.error("🚨 XML hierarchy debug error:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
