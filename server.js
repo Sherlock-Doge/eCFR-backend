@@ -1,8 +1,9 @@
-// eCFR Analyzer Backend – FINAL STRUCTURE-DRIVEN WORD COUNT IMPLEMENTATION (LOGGING+SCRAPER FIXED ✅ content-col fallback added)
+// eCFR Analyzer Backend – Optimized Puppeteer Word Count (Fetch & Release Model ✅)
 const express = require("express");
 const axios = require("axios");
 const { JSDOM } = require("jsdom");
 const NodeCache = require("node-cache");
+const puppeteer = require("puppeteer");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -107,7 +108,7 @@ async function streamAndCountWords(url) {
   }
 }
 
-// ===================== Word Count by Agency (Fixed Scraper + Visibility Logs) =====================
+// ===================== Word Count by Agency (Optimized Puppeteer Scraper) =====================
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
   const slug = req.params.slug;
   const agencies = metadataCache.get("agenciesMetadata") || [];
@@ -123,6 +124,9 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
   const breakdowns = [];
 
   try {
+    const browser = await puppeteer.launch({ headless: "new" });
+    const page = await browser.newPage();
+
     for (const ref of refs) {
       const title = ref.title;
       const chapter = ref.chapter || "N/A";
@@ -136,7 +140,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
         const meta = titles.find(t => t.number === title || t.number.toString() === title.toString());
         const issueDate = meta?.latest_issue_date;
         if (!issueDate) {
-          console.warn(`⚠️ No issue date found for Title ${title}`);
+          console.warn(`⚠️ No issue date for Title ${title}`);
           continue;
         }
 
@@ -159,26 +163,22 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
         words = 0;
         for (const url of sectionUrls) {
           try {
-            const html = await axios.get(url, { timeout: 30000 });
-            const dom = new JSDOM(html.data);
-
-            let content =
-              dom.window.document.querySelector(".content-col")?.textContent?.trim() ||
-              dom.window.document.querySelector("main")?.textContent?.trim() ||
-              dom.window.document.querySelector("#content")?.textContent?.trim() ||
-              dom.window.document.querySelector("#primary-content")?.textContent?.trim() ||
-              "";
-
-            const count = content.split(/\s+/).filter(Boolean).length;
+            await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+            const text = await page.evaluate(() => {
+              const el =
+                document.querySelector(".content-col") ||
+                document.querySelector("main") ||
+                document.querySelector("#content") ||
+                document.querySelector("#primary-content");
+              return el ? el.innerText : "";
+            });
+            const count = text.split(/\s+/).filter(Boolean).length;
             words += count;
 
-            if (!count || content.length < 10) {
-              console.warn(`⚠️ Scraped zero/empty content at ${url}`);
-            }
-
+            if (!count || text.length < 10) console.warn(`⚠️ Empty content at ${url}`);
             console.log(`📄 ${url} → ${count} words`);
           } catch (err) {
-            console.warn(`❌ Failed to scrape section: ${url} → ${err.message}`);
+            console.warn(`❌ Failed section: ${url} → ${err.message}`);
           }
         }
 
@@ -189,10 +189,11 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
       totalWords += words;
     }
 
+    await browser.close();
     res.json({ agency: agency.name, total: totalWords, breakdowns });
   } catch (e) {
-    console.error("🚨 Agency Word Count Error:", e.message);
-    res.status(500).json({ error: "Failed to fetch agency word count" });
+    console.error("🚨 Agency Puppeteer error:", e.message);
+    res.status(500).json({ error: "Failed to scrape agency content" });
   }
 });
 
