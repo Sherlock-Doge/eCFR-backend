@@ -1,10 +1,9 @@
-// eCFR Analyzer Backend – Optimized Puppeteer Word Count (Chromium-path Integration ✅)
+// eCFR Analyzer Backend – FINAL FIXED URL BUILDER + STRUCTURE MATCHING ✅
 const express = require("express");
 const axios = require("axios");
 const { JSDOM } = require("jsdom");
 const NodeCache = require("node-cache");
 const puppeteer = require("puppeteer-core");
-const chromium = require("chromium");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -109,7 +108,7 @@ async function streamAndCountWords(url) {
   }
 }
 
-// ===================== Word Count by Agency (Chromium-based Puppeteer) =====================
+// ===================== Word Count by Agency (Fixed URL Builder) =====================
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
   const slug = req.params.slug;
   const agencies = metadataCache.get("agenciesMetadata") || [];
@@ -127,7 +126,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
   try {
     const browser = await puppeteer.launch({
       headless: "new",
-      executablePath: chromium.path
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || "/usr/bin/chromium-browser"
     });
     const page = await browser.newPage();
 
@@ -153,16 +152,23 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
         const sectionUrls = [];
 
         function recurse(node, path = []) {
-          const currentPath = [...path, node.identifier];
-          if (node.type === "section" && currentPath.includes(chapter)) {
-            const url = `/current/title-${title}` + currentPath.map(p => `/${p}`).join("").replace(/^\/+/, "");
-            sectionUrls.push(BASE_URL + url);
+          const updatedPath = [...path];
+
+          if (node.type === "chapter") updatedPath.push(`chapter-${node.identifier}`);
+          if (node.type === "subchapter") updatedPath.push(`subchapter-${node.identifier}`);
+          if (node.type === "part") updatedPath.push(`part-${node.identifier}`);
+          if (node.type === "subpart") updatedPath.push(`subpart-${node.identifier}`);
+          if (node.type === "section") {
+            updatedPath.push(`section-${node.identifier}`);
+            const url = `${BASE_URL}/current/title-${title}/${updatedPath.join("/")}`;
+            sectionUrls.push(url);
           }
-          if (node.children) node.children.forEach(child => recurse(child, currentPath));
+
+          if (node.children) node.children.forEach(child => recurse(child, updatedPath));
         }
         recurse(structure);
 
-        console.log(`🔍 Found ${sectionUrls.length} section URLs for Title ${title}, Chapter ${chapter}`);
+        console.log(`🔍 Found ${sectionUrls.length} real section URLs for Title ${title}, Chapter ${chapter}`);
 
         words = 0;
         for (const url of sectionUrls) {
