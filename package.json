@@ -10,8 +10,6 @@
     "node-cache": "^5.1.2",
     "jsdom": "^24.0.0",
     "sax": "^1.2.4",
-    "puppeteer-core": "^21.3.8",
-    "chromium": "^3.0.0"
   },
   "scripts": {
     "start": "node server.js"
