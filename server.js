@@ -3,9 +3,6 @@ const express = require("express");
 const axios = require("axios");
 const { JSDOM } = require("jsdom");
 const NodeCache = require("node-cache");
-const puppeteer = require("puppeteer-core");
-const chromium = require("chromium");
-
 const app = express();
 const PORT = process.env.PORT || 10000;
 const BASE_URL = "https://www.ecfr.gov";
