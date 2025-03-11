@@ -285,3 +285,47 @@ app.get("/api/search/suggestions", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 eCFR Analyzer server running on port ${PORT}`);
 });
+
+
+
+// ===================== TEMP TEST: /api/test-puppeteer =====================
+app.get("/api/test-puppeteer", async (req, res) => {
+  const puppeteer = require("puppeteer-core");
+  const chromium = require("chromium");
+
+  try {
+    const browser = await puppeteer.launch({
+      headless: "new",
+      executablePath: chromium.path,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"]
+    });
+
+    const page = await browser.newPage();
+    const testUrl = "https://www.ecfr.gov/current/title-1/chapter-III/part-301/section-301.1";
+
+    await page.goto(testUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+
+    const text = await page.evaluate(() => {
+      const el =
+        document.querySelector(".content-col") ||
+        document.querySelector("main") ||
+        document.querySelector("#content") ||
+        document.querySelector("#primary-content");
+      return el ? el.innerText : "(No content found)";
+    });
+
+    const wordCount = text.split(/\s+/).filter(Boolean).length;
+
+    await browser.close();
+
+    res.json({
+      url: testUrl,
+      preview: text.slice(0, 200),
+      wordCount
+    });
+  } catch (e) {
+    console.error("🚨 /api/test-puppeteer error:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
