@@ -301,9 +301,17 @@ app.get("/api/test-puppeteer", async (req, res) => {
     });
 
     const page = await browser.newPage();
-    const testUrl = "https://www.ecfr.gov/current/title-1/chapter-III/part-301/section-301.1";
 
-    await page.goto(testUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+    // ✅ Spoof user-agent + headers to trick ECFR anti-bot defenses
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+    );
+    await page.setExtraHTTPHeaders({
+      "Accept-Language": "en-US,en;q=0.9"
+    });
+
+    const testUrl = "https://www.ecfr.gov/current/title-1/chapter-III/part-301/section-301.1";
+    await page.goto(testUrl, { waitUntil: "networkidle2", timeout: 60000 });
 
     const text = await page.evaluate(() => {
       const selectors = [
@@ -319,8 +327,7 @@ app.get("/api/test-puppeteer", async (req, res) => {
           return el.innerText.trim();
         }
       }
-
-      // Fallback: try body if all else fails
+      // Fallback
       return document.body?.innerText?.trim() || "(No content found)";
     });
 
@@ -330,7 +337,7 @@ app.get("/api/test-puppeteer", async (req, res) => {
 
     res.json({
       url: testUrl,
-      preview: text.slice(0, 300), // you can increase this if needed
+      preview: text.slice(0, 300),
       wordCount
     });
   } catch (e) {
@@ -338,4 +345,5 @@ app.get("/api/test-puppeteer", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
 
