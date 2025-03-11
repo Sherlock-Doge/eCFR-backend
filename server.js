@@ -157,20 +157,28 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
       const structure = (await axios.get(structureUrl)).data;
 
       const sectionSet = new Set();
+      let chapterMatched = false;
 
       const recurse = (node, inScope = false) => {
         if (!node || typeof node !== "object") return;
         if (inScope && node.type === "section") sectionSet.add(node.identifier);
-        if (node.type === "chapter" && node.identifier === chapter) inScope = true;
+        if (node.type === "chapter" && node.identifier === chapter) {
+          chapterMatched = true;
+          inScope = true;
+        }
         if (node.children) node.children.forEach((child) => recurse(child, inScope));
       };
 
       recurse(structure);
 
-      // Fallback: try to match structure node by agency name if no sections found
-      if (!sectionSet.size && (!chapter || chapter === "N/A" || chapter === "undefined")) {
-        const fallbackNode = findFallbackNodeByAgencyName(structure, agency.name) ||
-                             findFallbackNodeByAgencyName(structure, agency.short_name || "");
+      // Fallback logic: match structure node by agency name if no sections matched
+      if (!sectionSet.size && (!chapter || chapter === "N/A" || chapter === "undefined" || !chapterMatched)) {
+        console.warn(`⚠️ Fallback invoked for ${agency.name} (Title ${title}) due to missing/invalid chapter match`);
+
+        const fallbackNode =
+          findFallbackNodeByAgencyName(structure, agency.name) ||
+          findFallbackNodeByAgencyName(structure, agency.short_name || "");
+
         if (fallbackNode) {
           const deepCollect = (node) => {
             if (node.type === "section") sectionSet.add(node.identifier);
@@ -188,9 +196,14 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
 
       // STEP 2: Stream XML and collect word count for matched sections
       const xmlUrl = `${VERSIONER}/full/${issueDate}/title-${title}.xml`;
-      const response = await axios({ method: "GET", url: xmlUrl, responseType: "stream", timeout: 60000 });
-      const parser = sax.createStream(true);
+      const response = await axios({
+        method: "GET",
+        url: xmlUrl,
+        responseType: "stream",
+        timeout: 60000,
+      });
 
+      const parser = sax.createStream(true);
       let currentSection = null;
       let captureText = false;
       let currentText = "";
