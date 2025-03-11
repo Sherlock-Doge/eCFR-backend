@@ -366,9 +366,10 @@ app.get("/api/test-titlexml-debug/:titleNumber", async (req, res) => {
     const xmlUrl = `${VERSIONER}/full/${issueDate}/title-${titleNumber}.xml`;
     const response = await axios({ method: "GET", url: xmlUrl, responseType: "stream", timeout: 60000 });
 
-    // Step 2: Parse and extract section-level content
+    // Step 2: Parse XML and extract section content + collect all tag types
     const parser = sax.createStream(true);
     const sections = [];
+    const tagSet = new Set();
 
     let currentTag = "";
     let currentIdentifier = "";
@@ -377,12 +378,15 @@ app.get("/api/test-titlexml-debug/:titleNumber", async (req, res) => {
     let inSection = false;
 
     parser.on("opentag", node => {
+      tagSet.add(node.name);
+
       if (node.name === "SECTION") {
         inSection = true;
         currentIdentifier = node.attributes?.N || "";
         currentText = "";
       }
-      if (inSection && (node.name === "P" || node.name === "STARS" || node.name === "FP" || node.name === "GPOTABLE")) {
+
+      if (inSection && ["P", "FP", "STARS", "GPOTABLE", "HD"].includes(node.name)) {
         captureText = true;
         currentTag = node.name;
       }
@@ -401,7 +405,11 @@ app.get("/api/test-titlexml-debug/:titleNumber", async (req, res) => {
         const cleanText = currentText.trim();
         const wordCount = cleanText.split(/\s+/).filter(Boolean).length;
         if (wordCount > 0 && currentIdentifier) {
-          sections.push({ section: currentIdentifier, wordCount, preview: cleanText.slice(0, 150) });
+          sections.push({
+            section: currentIdentifier,
+            wordCount,
+            preview: cleanText.slice(0, 150)
+          });
         }
         currentIdentifier = "";
         currentText = "";
@@ -416,7 +424,11 @@ app.get("/api/test-titlexml-debug/:titleNumber", async (req, res) => {
     });
 
     parser.on("end", () => {
-      res.json({ title: `Title ${titleNumber}`, sections });
+      res.json({
+        title: `Title ${titleNumber}`,
+        uniqueTags: Array.from(tagSet).sort(),
+        sections
+      });
     });
 
     response.data.pipe(parser);
