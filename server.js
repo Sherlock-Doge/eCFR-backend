@@ -101,7 +101,7 @@ async function streamAndCountWords(url) {
   }
 }
 
-// ===================== Word Count by Agency (XML-based scoped version with fallback matching) =====================
+// ===================== Word Count by Agency (XML-based scoped version - FINAL with hardcoded patch) =====================
 
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
   const sax = require("sax");
@@ -113,35 +113,45 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
   );
   if (!agency) return res.status(404).json({ error: "Agency not found" });
 
+  // 🔧 Hardcoded CFR patch for known broken agencies
+  if (slug === "federal-procurement-regulations-system") {
+    agency.cfr_references = [{ title: 41, chapter: "A" }];
+  } else if (slug === "federal-property-management-regulations-system") {
+    agency.cfr_references = [{ title: 41, chapter: "C" }];
+  } else if (slug === "federal-travel-regulation-system") {
+    agency.cfr_references = [{ title: 41, chapter: "F" }];
+  } else if (slug === "department-of-defense") {
+    agency.cfr_references = [{ title: 32, chapter: "A" }];
+  } else if (slug === "department-of-health-and-human-services") {
+    agency.cfr_references = [
+      { title: 2, chapter: "III" },
+      { title: 5, chapter: "XLV" },
+      { title: 45, chapter: "A" },
+      { title: 48, chapter: "3" }
+    ];
+  } else if (slug === "office-of-management-and-budget") {
+    agency.cfr_references = [
+      { title: 2, chapter: "A" },
+      { title: 5, chapter: "III" },
+      { title: 5, chapter: "LXXVII" },
+      { title: 48, chapter: "99" }
+    ];
+  }
+
   const refs = agency.cfr_references || [];
   if (!refs.length) return res.json({ agency: agency.name, total: 0, breakdowns: [] });
 
   let totalWords = 0;
   const breakdowns = [];
 
-  // Fallback structure node match by agency name
-  const findFallbackNodeByAgencyName = (node, agencyName) => {
-    if (!node || typeof node !== "object") return null;
-    const heading = (node.heading || "").toLowerCase();
-    const normalizedAgency = agencyName.toLowerCase();
-    if (heading.includes(normalizedAgency)) return node;
-    if (node.children) {
-      for (const child of node.children) {
-        const found = findFallbackNodeByAgencyName(child, agencyName);
-        if (found) return found;
-      }
-    }
-    return null;
-  };
-
   for (const ref of refs) {
     const title = ref.title;
     const chapter = ref.chapter;
-    const cacheKey = `agency-scope-${slug}-title-${title}-chapter-${chapter || "fallback"}`;
+    const cacheKey = `agency-scope-${slug}-title-${title}-chapter-${chapter}`;
     let cachedCount = wordCountCache.get(cacheKey);
 
     if (cachedCount !== undefined) {
-      breakdowns.push({ title, chapter: chapter || "fallback", wordCount: cachedCount });
+      breakdowns.push({ title, chapter, wordCount: cachedCount });
       totalWords += cachedCount;
       continue;
     }
@@ -157,40 +167,19 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
       const structure = (await axios.get(structureUrl)).data;
 
       const sectionSet = new Set();
-      let chapterMatched = false;
 
       const recurse = (node, inScope = false) => {
         if (!node || typeof node !== "object") return;
         if (inScope && node.type === "section") sectionSet.add(node.identifier);
-        if (node.type === "chapter" && node.identifier === chapter) {
-          chapterMatched = true;
-          inScope = true;
-        }
+        if (node.type === "chapter" && node.identifier === chapter) inScope = true;
         if (node.children) node.children.forEach((child) => recurse(child, inScope));
       };
 
       recurse(structure);
 
-      // Fallback logic: match structure node by agency name if no sections matched
-      if (!sectionSet.size && (!chapter || chapter === "N/A" || chapter === "undefined" || !chapterMatched)) {
-        console.warn(`⚠️ Fallback invoked for ${agency.name} (Title ${title}) due to missing/invalid chapter match`);
-
-        const fallbackNode =
-          findFallbackNodeByAgencyName(structure, agency.name) ||
-          findFallbackNodeByAgencyName(structure, agency.short_name || "");
-
-        if (fallbackNode) {
-          const deepCollect = (node) => {
-            if (node.type === "section") sectionSet.add(node.identifier);
-            if (node.children) node.children.forEach(deepCollect);
-          };
-          deepCollect(fallbackNode);
-        }
-      }
-
       if (!sectionSet.size) {
         console.warn(`⚠️ No sections found for Title ${title}, Chapter ${chapter}`);
-        breakdowns.push({ title, chapter: chapter || "fallback", wordCount: 0 });
+        breakdowns.push({ title, chapter, wordCount: 0 });
         continue;
       }
 
@@ -200,7 +189,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
         method: "GET",
         url: xmlUrl,
         responseType: "stream",
-        timeout: 60000,
+        timeout: 60000
       });
 
       const parser = sax.createStream(true);
@@ -212,7 +201,6 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
 
       parser.on("opentag", (node) => {
         const { name, attributes } = node;
-
         if (name.startsWith("DIV") && attributes.TYPE && attributes.N) {
           stack.push({ type: attributes.TYPE.toLowerCase(), number: attributes.N });
 
@@ -249,7 +237,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
 
       parser.on("end", () => {
         wordCountCache.set(cacheKey, wordCount);
-        breakdowns.push({ title, chapter: chapter || "fallback", wordCount });
+        breakdowns.push({ title, chapter, wordCount });
         totalWords += wordCount;
 
         if (ref === refs[refs.length - 1]) {
@@ -268,7 +256,6 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
     }
   }
 });
-
 
 
 // ===================== Search =====================
