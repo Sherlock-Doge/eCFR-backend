@@ -101,7 +101,7 @@ async function streamAndCountWords(url) {
   }
 }
 
-// ===================== Word Count by Agency (XML-based scoped version - FINAL with hardcoded patch) =====================
+// ===================== Word Count by Agency (XML-based scoped version - FINAL PATCHED) =====================
 
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
   const sax = require("sax");
@@ -113,7 +113,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
   );
   if (!agency) return res.status(404).json({ error: "Agency not found" });
 
-  // 🔧 Hardcoded CFR patch for known broken agencies
+  // ✅ Hardcoded CFR patch for known broken agencies
   if (slug === "federal-procurement-regulations-system") {
     agency.cfr_references = [{ title: 41, chapter: "A" }];
   } else if (slug === "federal-property-management-regulations-system") {
@@ -171,7 +171,12 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
       const recurse = (node, inScope = false) => {
         if (!node || typeof node !== "object") return;
         if (inScope && node.type === "section") sectionSet.add(node.identifier);
-        if (node.type === "chapter" && node.identifier === chapter) inScope = true;
+
+        // ✅ Allow both chapter and subtitle as valid entry points
+        if ((node.type === "chapter" || node.type === "subtitle") && node.identifier === chapter) {
+          inScope = true;
+        }
+
         if (node.children) node.children.forEach((child) => recurse(child, inScope));
       };
 
@@ -256,6 +261,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
     }
   }
 });
+
 
 
 // ===================== Search =====================
