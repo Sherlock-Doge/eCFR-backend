@@ -1,4 +1,4 @@
-// eCFR Analyzer Backend – FINAL STRUCTURE-DRIVEN WORD COUNT IMPLEMENTATION (LOGGING+SCRAPER FIXED)
+// eCFR Analyzer Backend – FINAL STRUCTURE-DRIVEN WORD COUNT IMPLEMENTATION (LOGGING+SCRAPER FIXED ✅ content-col fallback added)
 const express = require("express");
 const axios = require("axios");
 const { JSDOM } = require("jsdom");
@@ -107,7 +107,7 @@ async function streamAndCountWords(url) {
   }
 }
 
-// ===================== Word Count by Agency (Structure-Driven + Enhanced Logs) =====================
+// ===================== Word Count by Agency (Fixed Scraper + Visibility Logs) =====================
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
   const slug = req.params.slug;
   const agencies = metadataCache.get("agenciesMetadata") || [];
@@ -161,15 +161,13 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
           try {
             const html = await axios.get(url, { timeout: 30000 });
             const dom = new JSDOM(html.data);
-            let content = dom.window.document.querySelector("main")?.textContent?.trim() || "";
 
-            // ⛑ Fallback: try alternative containers
-            if (!content || content.length < 50) {
-              content = dom.window.document.querySelector("#content")?.textContent?.trim() || "";
-            }
-            if (!content || content.length < 50) {
-              content = dom.window.document.querySelector("#primary-content")?.textContent?.trim() || "";
-            }
+            let content =
+              dom.window.document.querySelector(".content-col")?.textContent?.trim() ||
+              dom.window.document.querySelector("main")?.textContent?.trim() ||
+              dom.window.document.querySelector("#content")?.textContent?.trim() ||
+              dom.window.document.querySelector("#primary-content")?.textContent?.trim() ||
+              "";
 
             const count = content.split(/\s+/).filter(Boolean).length;
             words += count;
