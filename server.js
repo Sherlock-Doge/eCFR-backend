@@ -386,7 +386,7 @@ app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
 
 
 
-// ===================== 🐿️ Flying Cyber Squirrel Search Engine (Final Form) =====================
+// ===================== 🐿️ Flying Cyber Squirrel Search Engine (Final Polished Form) =====================
 app.get("/api/search/cyber-squirrel", async (req, res) => {
   const query = (req.query.q || "").toLowerCase().trim();
   const titleFilter = req.query.title ? parseInt(req.query.title) : null;
@@ -420,6 +420,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
         const heading = node.attributes.HEADING;
 
         if (type === "section") {
+          console.log(`➡️ Entered SECTION: ${identifier} (${heading || "No Heading"})`);
           currentSection = {
             section: identifier,
             heading: heading || "",
@@ -433,6 +434,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
         if (contentTags.has(node.name)) {
           inTextContent = true;
           textBuffer = "";
+          console.log(`📍 Capturing <${node.name}> text content`);
         }
       });
 
@@ -449,6 +451,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
             currentSection.heading.toLowerCase().includes(query)
           ) {
             currentSection.match = true;
+            console.log(`✅ MATCH in section ${currentSection.section}`);
           }
         }
 
