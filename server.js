@@ -4,6 +4,9 @@ const NodeCache = require("node-cache");
 const sax = require("sax");
 const fs = require("fs"); //added to support/api/wordcount/agency-fast/:slug
 const path = require("path"); //added to support/api/wordcount/agency-fast/:slug
+const cors = require("cors");
+app.use(cors());
+
 
 
 const app = express();
@@ -273,19 +276,17 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
 // =========================================================
 // ⚡ FAST Streaming XML Word Count by Agency (Experimental)
 // =========================================================
-    app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
-      const slug = req.params.slug.toLowerCase();
-    
-      try {
-        // Step 1: Load agencies from in-memory metadata cache
+app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
+  const slug = req.params.slug.toLowerCase();
+
+  try {
+    // Step 1: Load agencies from in-memory metadata cache
     const agencies = metadataCache.get("agenciesMetadata");
-    
     if (!agencies || !Array.isArray(agencies)) {
       return res.status(500).json({ error: "Agency metadata not available" });
     }
-    
+
     const agency = agencies.find(a => (a.slug || a.name.toLowerCase().replace(/\s+/g, '-')) === slug);
-    
     if (!agency || !agency.cfr_references || agency.cfr_references.length === 0) {
       return res.status(404).json({ error: "Agency or CFR references not found" });
     }
@@ -305,10 +306,20 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
       agencyRefs = [subtitleOverrides[slug]];
     }
 
-    // Step 3: Stream parse XML and count
-    const xmlPath = path.join(__dirname, 'data', `title-${agencyRefs[0].title}.xml`);
-    const stream = fs.createReadStream(xmlPath);
-    const sax = require('sax');
+    // Step 3: Fetch latest issue date from metadata cache
+    const titlesMeta = metadataCache.get("titlesMetadata") || [];
+    const agencyTitle = titlesMeta.find(t => t.number === agencyRefs[0].title);
+    const latestIssueDate = agencyTitle?.latest_issue_date;
+
+    if (!latestIssueDate) {
+      return res.status(500).json({ error: "Missing latest issue date for title" });
+    }
+
+    // Step 4: Live stream XML from eCFR.gov
+    const xmlUrl = `${VERSIONER}/full/${latestIssueDate}/title-${agencyRefs[0].title}.xml`;
+    console.log(`📡 Streaming XML from: ${xmlUrl}`);
+
+    const xmlResponse = await axios.get(xmlUrl, { responseType: "stream" });
     const parser = sax.createStream(true, {});
 
     let inMatch = false;
@@ -367,7 +378,8 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
       res.status(500).json({ error: 'SAX parsing failed' });
     });
 
-    stream.pipe(parser);
+    xmlResponse.data.pipe(parser);
+    
   } catch (err) {
     console.error("❌ Fast agency word count error:", err);
     res.status(500).json({ error: 'Internal Server Error' });
