@@ -385,17 +385,36 @@ app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
 });
 
 
-// ===================== Search (with link normalization) =====================
+// ===================== Search (with real link repair) =====================
 app.get("/api/search", async (req, res) => {
   try {
     const response = await axios.get(`${BASE_URL}/api/search/v1/results`, { params: req.query });
 
-    // 🔗 Normalize ECFR links in each result
     const results = (response.data.results || []).map(r => {
-      if (r.link && !r.link.startsWith("http")) {
-        r.link = `https://www.ecfr.gov/${r.link.replace(/^\/+/, "")}`;
+      let fixedLink = "";
+
+      // If already full URL, pass through
+      if (r.link && r.link.startsWith("http")) {
+        fixedLink = r.link;
+      } 
+      // If it looks like /current/title-X/... or /browse/title-X/..., fix properly
+      else if (r.link && r.link.match(/^\/(current|browse)\/title-\d+/)) {
+        fixedLink = `https://www.ecfr.gov${r.link.replace(/\/+$/, "")}`;
+      } 
+      // Fallback — if r.title and r.sectionId exist, construct link manually
+      else if (r.title && r.section_id) {
+        fixedLink = `https://www.ecfr.gov/current/title-${r.title}/section-${r.section_id}`;
+      } 
+      // As a last resort, send them to the title
+      else if (r.title) {
+        fixedLink = `https://www.ecfr.gov/current/title-${r.title}`;
+      } 
+      // If truly nothing valid
+      else {
+        fixedLink = `https://www.ecfr.gov`;
       }
-      return r;
+
+      return { ...r, link: fixedLink };
     });
 
     res.json({ ...response.data, results });
@@ -404,6 +423,7 @@ app.get("/api/search", async (req, res) => {
     res.status(500).json({ error: "Search failed" });
   }
 });
+
 
 
 // ===================== Search Count =====================
