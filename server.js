@@ -446,10 +446,10 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
       });
 
       parser.on("text", (text) => {
-        if (inTextContent && text.trim()) {
-          textBuffer += text;
-        }
-      });
+  if (text.trim() && currentSection) {
+    textBuffer += text;
+  }
+});
 
       parser.on("closetag", (name) => {
         if (contentTags.has(name) && currentSection) {
