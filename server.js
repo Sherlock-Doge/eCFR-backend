@@ -386,25 +386,36 @@ app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
 
 
 
-// ===================== Search with Section Resolution =====================
+// ===================== Search with #IamROOT Section Resolution =====================
 app.get("/api/search", async (req, res) => {
   try {
     const response = await axios.get(`${BASE_URL}/api/search/v1/results`, { params: req.query });
     const results = response.data.results || [];
 
-    // 🔗 Normalize ECFR links & Resolve Structure
     const normalized = results.map(r => {
       let resolvedLink = r.link || "";
 
-      // 🏹 Try to resolve via Section Index
-      if (r.headings?.section) {
-        const lookup = sectionIndex[r.headings.section.trim()];
-        if (lookup) {
-          resolvedLink = `https://www.ecfr.gov/current/title-${lookup.title}/part-${lookup.part}/section-${lookup.section}`;
+      // 1️⃣ Try to resolve via section index directly using headings.section
+      let lookupKey = r.headings?.section?.trim();
+
+      // 2️⃣ Fallback: try to parse a section reference from r.title (e.g., "§ 13.1" or "13.1")
+      if (!lookupKey && r.title) {
+        const sectionMatch = r.title.match(/§?\s?(\d{1,3}\.\d{1,4})/); // match "§ 13.1"
+        if (sectionMatch) {
+          lookupKey = `§ ${sectionMatch[1]}`;
         }
       }
 
-      return { ...r, link: resolvedLink };
+      // 3️⃣ Try to resolve a structural URL if we have a lookup key
+      if (lookupKey && sectionIndex[lookupKey]) {
+        const info = sectionIndex[lookupKey];
+        resolvedLink = `https://www.ecfr.gov/current/title-${info.title}/part-${info.part}/section-${info.section}`;
+      }
+
+      return {
+        ...r,
+        link: resolvedLink
+      };
     });
 
     res.json({ ...response.data, results: normalized });
@@ -413,6 +424,7 @@ app.get("/api/search", async (req, res) => {
     res.status(500).json({ error: "Search failed" });
   }
 });
+
 
 
 
