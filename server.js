@@ -405,8 +405,15 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
       const titleNumber = parseInt(titleMeta.number);
       if (titleFilter && titleNumber !== titleFilter) continue;
 
-      console.log(`📂 Streaming XML from Title ${titleNumber}...`);
-      const streamUrl = `${VERSIONER}/full/${titleMeta.latest_issue_date}/title-${titleNumber}.xml`;
+      // ✅ Use fallback for issue date (latest_issue_date OR up_to_date_as_of)
+      const issueDate = titleMeta.latest_issue_date || titleMeta.up_to_date_as_of;
+      if (!issueDate) {
+        console.warn(`⚠️ Skipping Title ${titleNumber} — No valid issue date available`);
+        continue;
+      }
+
+      const streamUrl = `${VERSIONER}/full/${issueDate}/title-${titleNumber}.xml`;
+      console.log(`📡 Streaming XML from: ${streamUrl}`);
       const response = await axios.get(streamUrl, { responseType: "stream" });
 
       const parser = sax.createStream(true, {});
