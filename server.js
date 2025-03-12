@@ -273,17 +273,21 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
 // =========================================================
 // ⚡ FAST Streaming XML Word Count by Agency (Experimental)
 // =========================================================
-app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
-  const slug = req.params.slug.toLowerCase();
-
-  try {
-    // Step 1: Load agencies.json
-    const agenciesPath = path.join(__dirname, 'data', 'agencies.json');
-    const agenciesData = JSON.parse(fs.readFileSync(agenciesPath, 'utf8'));
-    const agency = agenciesData.agencies.find(a => (a.slug || a.name.toLowerCase().replace(/\s+/g, '-')) === slug);
-
+    app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
+      const slug = req.params.slug.toLowerCase();
+    
+      try {
+        // Step 1: Load agencies from in-memory metadata cache
+    const agencies = metadataCache.get("agencies");
+    
+    if (!agencies || !Array.isArray(agencies)) {
+      return res.status(500).json({ error: "Agency metadata not available" });
+    }
+    
+    const agency = agencies.find(a => (a.slug || a.name.toLowerCase().replace(/\s+/g, '-')) === slug);
+    
     if (!agency || !agency.cfr_references || agency.cfr_references.length === 0) {
-      return res.status(404).json({ error: 'Agency or CFR references not found' });
+      return res.status(404).json({ error: "Agency or CFR references not found" });
     }
 
     // Step 2: Apply subtitle/chapter patch logic
