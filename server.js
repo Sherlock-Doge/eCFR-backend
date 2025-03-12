@@ -5,11 +5,9 @@ const sax = require("sax");
 const fs = require("fs"); //added to support/api/wordcount/agency-fast/:slug
 const path = require("path"); //added to support/api/wordcount/agency-fast/:slug
 const cors = require("cors");
-app.use(cors());
-
-
 
 const app = express();
+app.use(cors());
 const PORT = process.env.PORT || 10000;
 const BASE_URL = "https://www.ecfr.gov";
 const VERSIONER = `${BASE_URL}/api/versioner/v1`;
