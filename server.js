@@ -390,7 +390,12 @@ app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
 app.get("/api/search/cyber-squirrel", async (req, res) => {
   const query = (req.query.q || "").toLowerCase().trim();
   const titleFilter = req.query.title ? parseInt(req.query.title) : null;
-  if (!query) return res.json({ results: [] });
+  if (!query) {
+    console.log("⚠️ Empty query received. Returning empty results.");
+    return res.json({ results: [] });
+  }
+
+  console.log(`🛫 Cyber Squirrel Internal Search → Query: "${query}" | Title Filter: ${titleFilter || "None"}`);
 
   const matchedResults = [];
 
@@ -401,14 +406,17 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
       const titleNumber = parseInt(titleMeta.number);
       if (titleFilter && titleNumber !== titleFilter) continue;
 
-      const xmlPath = path.join(__dirname, 'data', `title-${titleNumber}.xml`);
+      const xmlPath = path.join(__dirname, "data", `title-${titleNumber}.xml`);
       if (!fs.existsSync(xmlPath)) {
         console.warn(`⚠️ XML missing for Title ${titleNumber}. Skipping...`);
         continue;
       }
 
+      console.log(`📂 Searching Title ${titleNumber} (Path: ${xmlPath})`);
+
       const stream = fs.createReadStream(xmlPath);
       const parser = sax.createStream(true, {});
+
       let currentSection = null;
       let textBuffer = "";
       let inTextContent = false;
@@ -439,19 +447,23 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
       });
 
       parser.on("text", (text) => {
-        if (inTextContent) textBuffer += text;
+        if (inTextContent && text.trim()) {
+          console.log(`🪵 TEXT DETECTED: "${text.trim().substring(0, 100)}..."`);
+          textBuffer += text;
+        }
       });
 
       parser.on("closetag", (name) => {
         if (contentTags.has(name) && currentSection) {
           inTextContent = false;
           currentSection.content += textBuffer + " ";
+
           if (
             textBuffer.toLowerCase().includes(query) ||
             currentSection.heading.toLowerCase().includes(query)
           ) {
             currentSection.match = true;
-            console.log(`✅ MATCH in section ${currentSection.section}`);
+            console.log(`✅ MATCH FOUND in Section ${currentSection.section} (Title ${titleNumber})`);
           }
         }
 
@@ -475,13 +487,13 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
       });
     }
 
+    console.log(`🎯 Cyber Squirrel Search Completed → Found ${matchedResults.length} matches.`);
     res.json({ results: matchedResults });
   } catch (err) {
     console.error("💥 Cyber Squirrel Error:", err);
     res.status(500).json({ error: "Search failed" });
   }
 });
-
 
 // ===================== Search Count =====================
 app.get("/api/search/count", async (req, res) => {
@@ -493,6 +505,7 @@ app.get("/api/search/count", async (req, res) => {
     res.status(500).json({ error: "Search count failed" });
   }
 });
+
 
 // ===================== Suggestions (Enhanced + ECFR Merge) =====================
 app.get("/api/search/suggestions", async (req, res) => {
