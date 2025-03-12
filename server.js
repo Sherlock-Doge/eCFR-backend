@@ -385,36 +385,23 @@ app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
 });
 
 
-// ===================== Search (with real link repair) =====================
+// ===================== Search (final, safe normalization) =====================
 app.get("/api/search", async (req, res) => {
   try {
     const response = await axios.get(`${BASE_URL}/api/search/v1/results`, { params: req.query });
 
     const results = (response.data.results || []).map(r => {
-      let fixedLink = "";
+      let link = r.link || "";
 
-      // If already full URL, pass through
-      if (r.link && r.link.startsWith("http")) {
-        fixedLink = r.link;
-      } 
-      // If it looks like /current/title-X/... or /browse/title-X/..., fix properly
-      else if (r.link && r.link.match(/^\/(current|browse)\/title-\d+/)) {
-        fixedLink = `https://www.ecfr.gov${r.link.replace(/\/+$/, "")}`;
-      } 
-      // Fallback — if r.title and r.sectionId exist, construct link manually
-      else if (r.title && r.section_id) {
-        fixedLink = `https://www.ecfr.gov/current/title-${r.title}/section-${r.section_id}`;
-      } 
-      // As a last resort, send them to the title
-      else if (r.title) {
-        fixedLink = `https://www.ecfr.gov/current/title-${r.title}`;
-      } 
-      // If truly nothing valid
-      else {
-        fixedLink = `https://www.ecfr.gov`;
+      // If it's already a full URL, leave it alone
+      if (link.startsWith("http")) {
+        return r;
       }
 
-      return { ...r, link: fixedLink };
+      // If it's a relative path (e.g., "/current/title-40/section-12"), prepend base domain
+      link = `https://www.ecfr.gov/${link.replace(/^\/+/, "")}`;
+
+      return { ...r, link };
     });
 
     res.json({ ...response.data, results });
@@ -423,7 +410,6 @@ app.get("/api/search", async (req, res) => {
     res.status(500).json({ error: "Search failed" });
   }
 });
-
 
 
 // ===================== Search Count =====================
