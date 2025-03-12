@@ -101,7 +101,7 @@ async function streamAndCountWords(url) {
   }
 }
 
-// ===================== Word Count by Agency (XML-based scoped version - FINAL FIXED) =====================
+// ===================== Word Count by Agency (FINAL - Bulletproof Subtitle/Chapter Handling) =====================
 
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
   const sax = require("sax");
@@ -113,25 +113,29 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
   );
   if (!agency) return res.status(404).json({ error: "Agency not found" });
 
-  // ✅ Hardcoded CFR patch for 6 problematic agencies
+  // ✅ Apply bulletproof hardcoded CFR patch
+  let subtitleStartMap = {}; // { title: identifier }
   if (slug === "federal-procurement-regulations-system") {
-    agency.cfr_references = [{ title: 41, chapter: "subtitle-A" }];
+    agency.cfr_references = [{ title: 41 }];
+    subtitleStartMap[41] = "A";
   } else if (slug === "federal-property-management-regulations-system") {
-    agency.cfr_references = [{ title: 41, chapter: "subtitle-C" }];
+    agency.cfr_references = [{ title: 41 }];
+    subtitleStartMap[41] = "C";
   } else if (slug === "federal-travel-regulation-system") {
-    agency.cfr_references = [{ title: 41, chapter: "subtitle-F" }];
+    agency.cfr_references = [{ title: 41 }];
+    subtitleStartMap[41] = "F";
   } else if (slug === "department-of-defense") {
-    agency.cfr_references = [{ title: 32, chapter: "subtitle-A" }];
+    agency.cfr_references = [{ title: 32, chapter: "A" }];
   } else if (slug === "department-of-health-and-human-services") {
     agency.cfr_references = [
       { title: 2, chapter: "III" },
       { title: 5, chapter: "XLV" },
-      { title: 45, chapter: "subtitle-A" },
+      { title: 45, chapter: "A" },
       { title: 48, chapter: "3" }
     ];
   } else if (slug === "office-of-management-and-budget") {
     agency.cfr_references = [
-      { title: 2, chapter: "subtitle-A" },
+      { title: 2, chapter: "A" },
       { title: 5, chapter: "III" },
       { title: 5, chapter: "LXXVII" },
       { title: 48, chapter: "99" }
@@ -146,12 +150,13 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
 
   for (const ref of refs) {
     const title = ref.title;
-    const chapter = ref.chapter;
-    const cacheKey = `agency-scope-${slug}-title-${title}-chapter-${chapter}`;
+    const chapter = ref.chapter || null;
+    const startAtSubtitle = subtitleStartMap[title] || null;
+    const cacheKey = `agency-scope-${slug}-title-${title}-chapter-${chapter || startAtSubtitle || "none"}`;
     let cachedCount = wordCountCache.get(cacheKey);
 
     if (cachedCount !== undefined) {
-      breakdowns.push({ title, chapter, wordCount: cachedCount });
+      breakdowns.push({ title, chapter: chapter || startAtSubtitle || null, wordCount: cachedCount });
       totalWords += cachedCount;
       continue;
     }
@@ -162,47 +167,47 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
       const issueDate = meta?.latest_issue_date;
       if (!issueDate) continue;
 
+      // STEP 1: Fetch structure and identify section nodes
       const structureUrl = `${VERSIONER}/structure/${issueDate}/title-${title}.json`;
       const structure = (await axios.get(structureUrl)).data;
 
       const sectionSet = new Set();
+      let matched = false;
 
-      // Find exact node with matching identifier (subtitle or chapter)
-      const findStartNode = (node) => {
-        if (!node || typeof node !== "object") return null;
-        const id = node.identifier?.toLowerCase();
-        const expected = chapter?.toLowerCase();
-        if ((node.type === "chapter" || node.type === "subtitle") && id === expected) return node;
-        if (node.children) {
-          for (const child of node.children) {
-            const match = findStartNode(child);
-            if (match) return match;
-          }
-        }
-        return null;
-      };
-
-      const collectSections = (node) => {
+      const recurse = (node, inScope = false) => {
         if (!node || typeof node !== "object") return;
-        if (node.type === "section" && node.identifier) sectionSet.add(node.identifier);
-        if (node.children) node.children.forEach(collectSections);
+
+        // ✅ Entry condition 1: explicit chapter match
+        if (!inScope && chapter && node.type === "chapter" && node.identifier === chapter) {
+          inScope = true;
+          matched = true;
+        }
+
+        // ✅ Entry condition 2: subtitle match for Title 41 agencies
+        if (!inScope && startAtSubtitle && node.type === "subtitle" && node.identifier === startAtSubtitle) {
+          inScope = true;
+          matched = true;
+        }
+
+        // ✅ Collect section identifiers
+        if (inScope && node.type === "section") {
+          sectionSet.add(node.identifier);
+        }
+
+        if (node.children) {
+          node.children.forEach((child) => recurse(child, inScope));
+        }
       };
 
-      const startNode = findStartNode(structure);
-      if (!startNode) {
-        console.warn(`⚠️ No matching structure node for Title ${title}, Chapter ${chapter}`);
-        breakdowns.push({ title, chapter, wordCount: 0 });
-        continue;
-      }
-
-      collectSections(startNode);
+      recurse(structure);
 
       if (!sectionSet.size) {
-        console.warn(`⚠️ No sections under matched node for Title ${title}, Chapter ${chapter}`);
-        breakdowns.push({ title, chapter, wordCount: 0 });
+        console.warn(`⚠️ No sections under matched node for Title ${title}, Chapter ${chapter || startAtSubtitle}`);
+        breakdowns.push({ title, chapter: chapter || startAtSubtitle || null, wordCount: 0 });
         continue;
       }
 
+      // STEP 2: Stream parse XML for matched sections
       const xmlUrl = `${VERSIONER}/full/${issueDate}/title-${title}.xml`;
       const response = await axios({
         method: "GET",
@@ -222,23 +227,28 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
         const { name, attributes } = node;
         if (name.startsWith("DIV") && attributes.TYPE && attributes.N) {
           stack.push({ type: attributes.TYPE.toLowerCase(), number: attributes.N });
+
           if (attributes.TYPE.toLowerCase() === "section" && sectionSet.has(attributes.N)) {
             currentSection = attributes.N;
           }
         }
+
         if (currentSection && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(name)) {
           captureText = true;
         }
       });
 
       parser.on("text", (text) => {
-        if (captureText && currentSection) currentText += text.trim() + " ";
+        if (captureText && currentSection) {
+          currentText += text.trim() + " ";
+        }
       });
 
       parser.on("closetag", (tag) => {
         if (captureText && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(tag)) {
           captureText = false;
         }
+
         if (tag.startsWith("DIV") && stack.length > 0) {
           const popped = stack.pop();
           if (popped.type === "section" && popped.number === currentSection) {
@@ -251,7 +261,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
 
       parser.on("end", () => {
         wordCountCache.set(cacheKey, wordCount);
-        breakdowns.push({ title, chapter, wordCount });
+        breakdowns.push({ title, chapter: chapter || startAtSubtitle || null, wordCount });
         totalWords += wordCount;
 
         if (ref === refs[refs.length - 1]) {
@@ -270,6 +280,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
     }
   }
 });
+
 
 
 // ===================== Search =====================
