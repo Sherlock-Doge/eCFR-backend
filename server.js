@@ -386,8 +386,7 @@ app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
 
 
 
-// ===================== 🐿️ Flying Cyber Squirrel Search Engine =====================
-// Real-time XML Structure-Aware Search (Full Tree Traversal)
+// ===================== 🐿️ Flying Cyber Squirrel Search Engine (Final Form) =====================
 app.get("/api/search/cyber-squirrel", async (req, res) => {
   const query = (req.query.q || "").toLowerCase().trim();
   const titleFilter = req.query.title ? parseInt(req.query.title) : null;
@@ -411,8 +410,9 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
       const stream = fs.createReadStream(xmlPath);
       const parser = sax.createStream(true, {});
       let currentSection = null;
-      let currentTextBuffer = "";
-      let inText = false;
+      let textBuffer = "";
+      let inTextContent = false;
+      const contentTags = new Set(["P", "TEXT", "EXTRACT", "SUBJECT", "FP"]);
 
       parser.on("opentag", (node) => {
         const type = node.attributes.TYPE;
@@ -430,24 +430,25 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
           };
         }
 
-        if (node.name === "TEXT") {
-          inText = true;
-          currentTextBuffer = "";
+        if (contentTags.has(node.name)) {
+          inTextContent = true;
+          textBuffer = "";
         }
       });
 
       parser.on("text", (text) => {
-        if (inText) currentTextBuffer += text;
+        if (inTextContent) textBuffer += text;
       });
 
       parser.on("closetag", (name) => {
-        if (name === "TEXT") {
-          inText = false;
-          if (currentSection) {
-            currentSection.content += currentTextBuffer;
-            if (currentTextBuffer.toLowerCase().includes(query)) {
-              currentSection.match = true;
-            }
+        if (contentTags.has(name) && currentSection) {
+          inTextContent = false;
+          currentSection.content += textBuffer + " ";
+          if (
+            textBuffer.toLowerCase().includes(query) ||
+            currentSection.heading.toLowerCase().includes(query)
+          ) {
+            currentSection.match = true;
           }
         }
 
@@ -463,10 +464,6 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
           }
           currentSection = null;
         }
-      });
-
-      parser.on("end", () => {
-        // no-op — final JSON is sent after all streams finish
       });
 
       await new Promise((resolve, reject) => {
