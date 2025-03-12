@@ -101,7 +101,7 @@ async function streamAndCountWords(url) {
   }
 }
 
-// ===================== Word Count by Agency (XML-based scoped version – FINAL BULLETPROOF) =====================
+// ===================== Word Count by Agency (XML-based FINAL FIXED version) =====================
 
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
   const sax = require("sax");
@@ -113,25 +113,25 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
   );
   if (!agency) return res.status(404).json({ error: "Agency not found" });
 
-  // ✅ Final hardcoded CFR patch with explicit type matching
+  // ✅ Final hardcoded patch with useAsRoot and type indicators
   if (slug === "federal-procurement-regulations-system") {
-    agency.cfr_references = [{ title: 41, chapter: "A", type: "subtitle" }];
+    agency.cfr_references = [{ title: 41, chapter: null, type: "subtitle", useAsRoot: true }];
   } else if (slug === "federal-property-management-regulations-system") {
-    agency.cfr_references = [{ title: 41, chapter: "C", type: "subtitle" }];
+    agency.cfr_references = [{ title: 41, chapter: null, type: "subtitle", useAsRoot: true }];
   } else if (slug === "federal-travel-regulation-system") {
-    agency.cfr_references = [{ title: 41, chapter: "F", type: "subtitle" }];
+    agency.cfr_references = [{ title: 41, chapter: null, type: "subtitle", useAsRoot: true }];
   } else if (slug === "department-of-defense") {
-    agency.cfr_references = [{ title: 32, chapter: "A", type: "subtitle" }];
+    agency.cfr_references = [{ title: 32, chapter: null, type: "subtitle", useAsRoot: true }];
   } else if (slug === "department-of-health-and-human-services") {
     agency.cfr_references = [
       { title: 2, chapter: "III", type: "chapter" },
       { title: 5, chapter: "XLV", type: "chapter" },
-      { title: 45, chapter: "A", type: "subtitle" },
+      { title: 45, chapter: null, type: "subtitle", useAsRoot: true },
       { title: 48, chapter: "3", type: "chapter" }
     ];
   } else if (slug === "office-of-management-and-budget") {
     agency.cfr_references = [
-      { title: 2, chapter: "A", type: "subtitle" },
+      { title: 2, chapter: null, type: "subtitle", useAsRoot: true },
       { title: 5, chapter: "III", type: "chapter" },
       { title: 5, chapter: "LXXVII", type: "chapter" },
       { title: 48, chapter: "99", type: "chapter" }
@@ -148,11 +148,12 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
     const title = ref.title;
     const chapter = ref.chapter;
     const matchType = ref.type || "chapter";
-    const cacheKey = `agency-scope-${slug}-title-${title}-chapter-${chapter}-${matchType}`;
+    const useAsRoot = ref.useAsRoot || false;
+    const cacheKey = `agency-scope-${slug}-title-${title}-chapter-${chapter || "root"}`;
     let cachedCount = wordCountCache.get(cacheKey);
 
     if (cachedCount !== undefined) {
-      breakdowns.push({ title, chapter, wordCount: cachedCount });
+      breakdowns.push({ title, chapter: chapter || "", wordCount: cachedCount });
       totalWords += cachedCount;
       continue;
     }
@@ -163,6 +164,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
       const issueDate = meta?.latest_issue_date;
       if (!issueDate) continue;
 
+      // STEP 1: Structure JSON traversal → collect section identifiers
       const structureUrl = `${VERSIONER}/structure/${issueDate}/title-${title}.json`;
       const structure = (await axios.get(structureUrl)).data;
 
@@ -172,9 +174,11 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
       const recurse = (node, inScope = false) => {
         if (!node || typeof node !== "object") return;
 
-        if (node.type === matchType && node.identifier === chapter && !chapterMatched) {
-          inScope = true;
-          chapterMatched = true;
+        if (!chapterMatched && node.type === matchType) {
+          if (useAsRoot || !chapter || node.identifier === chapter) {
+            inScope = true;
+            chapterMatched = true;
+          }
         }
 
         if (inScope && node.type === "section") {
@@ -190,11 +194,11 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
 
       if (!sectionSet.size) {
         console.warn(`⚠️ No sections found for Title ${title}, Chapter ${chapter}, Type ${matchType}`);
-        breakdowns.push({ title, chapter, wordCount: 0 });
+        breakdowns.push({ title, chapter: chapter || "", wordCount: 0 });
         continue;
       }
 
-      // Stream XML and count words
+      // STEP 2: Stream XML and collect word count for matched sections
       const xmlUrl = `${VERSIONER}/full/${issueDate}/title-${title}.xml`;
       const response = await axios({
         method: "GET",
@@ -214,12 +218,10 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
         const { name, attributes } = node;
         if (name.startsWith("DIV") && attributes.TYPE && attributes.N) {
           stack.push({ type: attributes.TYPE.toLowerCase(), number: attributes.N });
-
           if (attributes.TYPE.toLowerCase() === "section" && sectionSet.has(attributes.N)) {
             currentSection = attributes.N;
           }
         }
-
         if (currentSection && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(name)) {
           captureText = true;
         }
@@ -235,7 +237,6 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
         if (captureText && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(tag)) {
           captureText = false;
         }
-
         if (tag.startsWith("DIV") && stack.length > 0) {
           const popped = stack.pop();
           if (popped.type === "section" && popped.number === currentSection) {
@@ -248,9 +249,8 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
 
       parser.on("end", () => {
         wordCountCache.set(cacheKey, wordCount);
-        breakdowns.push({ title, chapter, wordCount });
+        breakdowns.push({ title, chapter: chapter || "", wordCount });
         totalWords += wordCount;
-
         if (ref === refs[refs.length - 1]) {
           res.json({ agency: agency.name, total: totalWords, breakdowns });
         }
@@ -267,6 +267,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
     }
   }
 });
+
 
 
 
