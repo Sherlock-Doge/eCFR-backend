@@ -385,23 +385,27 @@ app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
 });
 
 
+
 // ===================== Search (final, safe normalization) =====================
 app.get("/api/search", async (req, res) => {
   try {
     const response = await axios.get(`${BASE_URL}/api/search/v1/results`, { params: req.query });
 
     const results = (response.data.results || []).map(r => {
-      let link = r.link || "";
+      let link = r.link?.trim() || "";
 
-      // If it's already a full URL, leave it alone
-      if (link.startsWith("http")) {
-        return r;
+      // If link already starts with 'http', it's fully qualified — use it as-is
+      if (/^https?:\/\//i.test(link)) {
+        return { ...r, link };
       }
 
-      // If it's a relative path (e.g., "/current/title-40/section-12"), prepend base domain
-      link = `https://www.ecfr.gov/${link.replace(/^\/+/, "")}`;
+      // If it's an ECFR-relative path, prepend domain cleanly
+      if (link.startsWith("/")) {
+        return { ...r, link: `https://www.ecfr.gov${link}` };
+      }
 
-      return { ...r, link };
+      // If it's something malformed or empty, fallback
+      return { ...r, link: "https://www.ecfr.gov" };
     });
 
     res.json({ ...response.data, results });
@@ -410,6 +414,7 @@ app.get("/api/search", async (req, res) => {
     res.status(500).json({ error: "Search failed" });
   }
 });
+
 
 
 // ===================== Search Count =====================
