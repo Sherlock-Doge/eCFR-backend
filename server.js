@@ -386,7 +386,7 @@ app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
 
 
 
-// ===================== 🐿️ Flying Cyber Squirrel Search Engine (Final Polished Streaming Version) =====================
+// ===================== 🐿️ Flying Cyber Squirrel Search Engine (Final Polished Form) =====================
 app.get("/api/search/cyber-squirrel", async (req, res) => {
   const query = (req.query.q || "").toLowerCase().trim();
   const titleFilter = req.query.title ? parseInt(req.query.title) : null;
@@ -396,7 +396,6 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
   }
 
   console.log(`🛫 Cyber Squirrel Internal Search → Query: "${query}" | Title Filter: ${titleFilter || "None"}`);
-
   const matchedResults = [];
 
   try {
@@ -406,13 +405,11 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
       const titleNumber = parseInt(titleMeta.number);
       if (titleFilter && titleNumber !== titleFilter) continue;
 
-      const xmlUrl = `${VERSIONER}/full/${titleMeta.latest_issue_date}/title-${titleNumber}.xml`;
-      console.log(`📡 Streaming XML from: ${xmlUrl}`);
+      console.log(`📂 Streaming XML from Title ${titleNumber}...`);
+      const streamUrl = `${VERSIONER}/full/${titleMeta.latest_issue_date}/title-${titleNumber}.xml`;
+      const response = await axios.get(streamUrl, { responseType: "stream" });
 
-      const response = await axios.get(xmlUrl, { responseType: "stream" });
-      const stream = response.data;
       const parser = sax.createStream(true, {});
-
       let currentSection = null;
       let textBuffer = "";
       let inTextContent = false;
@@ -424,12 +421,12 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
         const heading = node.attributes.HEADING;
 
         if (type === "section") {
-          console.log(`➡️ Entered SECTION: ${identifier} (${heading || "No Heading"})`);
+          console.log(`➡️ SECTION: ${identifier} (${heading || "No Heading"})`);
           currentSection = {
             section: identifier,
             heading: heading || "",
-            content: "",
             match: false,
+            content: "",
             title: titleNumber,
             url: `https://www.ecfr.gov/current/title-${titleNumber}/section-${identifier}`
           };
@@ -438,13 +435,11 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
         if (contentTags.has(node.name)) {
           inTextContent = true;
           textBuffer = "";
-          console.log(`📍 Capturing <${node.name}> text content`);
         }
       });
 
       parser.on("text", (text) => {
         if (inTextContent && text.trim()) {
-          console.log(`🪵 TEXT DETECTED: "${text.trim().substring(0, 100)}..."`);
           textBuffer += text;
         }
       });
@@ -452,15 +447,18 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
       parser.on("closetag", (name) => {
         if (contentTags.has(name) && currentSection) {
           inTextContent = false;
-          currentSection.content += textBuffer + " ";
 
-          if (
-            textBuffer.toLowerCase().includes(query) ||
-            currentSection.heading.toLowerCase().includes(query)
-          ) {
+          const normalizedText = textBuffer.toLowerCase();
+          const matchFound =
+            normalizedText.includes(query) ||
+            currentSection.heading.toLowerCase().includes(query);
+
+          if (matchFound) {
             currentSection.match = true;
-            console.log(`✅ MATCH FOUND in Section ${currentSection.section} (Title ${titleNumber})`);
+            currentSection.content += textBuffer.trim() + " ";
           }
+
+          textBuffer = "";
         }
 
         if (name === "SECTION" && currentSection) {
@@ -472,18 +470,18 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
               excerpt: currentSection.content.trim().substring(0, 500) + "...",
               link: currentSection.url
             });
+            console.log(`✅ MATCH FOUND in Section ${currentSection.section} (Title ${titleNumber})`);
           }
           currentSection = null;
         }
       });
 
       await new Promise((resolve, reject) => {
-        parser.on("error", reject);
-        stream.pipe(parser).on("end", resolve);
+        response.data.pipe(parser).on("end", resolve).on("error", reject);
       });
     }
 
-    console.log(`🎯 Cyber Squirrel Search Completed → Found ${matchedResults.length} matches.`);
+    console.log(`🎯 Cyber Squirrel Search Completed → ${matchedResults.length} matches found.`);
     res.json({ results: matchedResults });
   } catch (err) {
     console.error("💥 Cyber Squirrel Error:", err);
