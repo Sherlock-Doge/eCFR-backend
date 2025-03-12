@@ -494,7 +494,7 @@ app.get("/api/search/count", async (req, res) => {
   }
 });
 
-// ===================== Suggestions =====================
+// ===================== Suggestions (Enhanced + ECFR Merge) =====================
 app.get("/api/search/suggestions", async (req, res) => {
   const query = (req.query.query || "").toLowerCase().trim();
   if (!query) return res.json({ suggestions: [] });
@@ -505,8 +505,10 @@ app.get("/api/search/suggestions", async (req, res) => {
 
     const titles = metadataCache.get("titlesMetadata") || [];
     const agencies = metadataCache.get("agenciesMetadata") || [];
+
     let suggestions = [];
 
+    // 1️⃣ Local title/agency matches
     titles.forEach(t => {
       if (t.name.toLowerCase().includes(query)) suggestions.push(`Title ${t.number}: ${t.name}`);
     });
@@ -514,14 +516,34 @@ app.get("/api/search/suggestions", async (req, res) => {
       if (a.name.toLowerCase().includes(query)) suggestions.push(a.name);
     });
 
-    suggestions = [...new Set(suggestions)].slice(0, 10);
+    // 2️⃣ Section headings (new internal addition)
+    if (metadataCache.has("sectionHeadings")) {
+      const headings = metadataCache.get("sectionHeadings") || [];
+      headings.forEach(h => {
+        if (h.toLowerCase().includes(query)) suggestions.push(h);
+      });
+    }
+
+    // 3️⃣ ECFR /api/search/v1/suggestions merge (retry)
+    try {
+      const ecfrResponse = await axios.get(`${BASE_URL}/api/search/v1/suggestions?query=${encodeURIComponent(query)}`);
+      if (Array.isArray(ecfrResponse.data.suggestions)) {
+        suggestions.push(...ecfrResponse.data.suggestions);
+      }
+    } catch (e) {
+      console.warn("⚠️ ECFR Suggestions fallback failed:", e.message);
+    }
+
+    suggestions = [...new Set(suggestions)].slice(0, 15); // Dedupe + trim
     suggestionCache.set(cacheKey, suggestions);
+
     res.json({ suggestions });
   } catch (e) {
     console.error("🚨 Suggestion error:", e.message);
     res.status(500).json({ suggestions: [] });
   }
 });
+
 
 // ===================== Metadata Preload =====================
 (async function preloadMetadata() {
