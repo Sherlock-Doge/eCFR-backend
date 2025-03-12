@@ -386,7 +386,7 @@ app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
 
 
 
-// ===================== 🐿️ Flying Cyber Squirrel Search Engine (Final Polished Form) =====================
+// ===================== 🐿️ Flying Cyber Squirrel Search Engine (Final Polished Streaming Version) =====================
 app.get("/api/search/cyber-squirrel", async (req, res) => {
   const query = (req.query.q || "").toLowerCase().trim();
   const titleFilter = req.query.title ? parseInt(req.query.title) : null;
@@ -406,15 +406,11 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
       const titleNumber = parseInt(titleMeta.number);
       if (titleFilter && titleNumber !== titleFilter) continue;
 
-      const xmlPath = path.join(__dirname, "data", `title-${titleNumber}.xml`);
-      if (!fs.existsSync(xmlPath)) {
-        console.warn(`⚠️ XML missing for Title ${titleNumber}. Skipping...`);
-        continue;
-      }
+      const xmlUrl = `${VERSIONER}/full/${titleMeta.latest_issue_date}/title-${titleNumber}.xml`;
+      console.log(`📡 Streaming XML from: ${xmlUrl}`);
 
-      console.log(`📂 Searching Title ${titleNumber} (Path: ${xmlPath})`);
-
-      const stream = fs.createReadStream(xmlPath);
+      const response = await axios.get(xmlUrl, { responseType: "stream" });
+      const stream = response.data;
       const parser = sax.createStream(true, {});
 
       let currentSection = null;
@@ -494,6 +490,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
     res.status(500).json({ error: "Search failed" });
   }
 });
+
 
 // ===================== Search Count =====================
 app.get("/api/search/count", async (req, res) => {
