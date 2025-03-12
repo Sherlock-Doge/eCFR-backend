@@ -385,16 +385,26 @@ app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
 });
 
 
-// ===================== Search =====================
+// ===================== Search (with link normalization) =====================
 app.get("/api/search", async (req, res) => {
   try {
     const response = await axios.get(`${BASE_URL}/api/search/v1/results`, { params: req.query });
-    res.json(response.data);
+
+    // 🔗 Normalize ECFR links in each result
+    const results = (response.data.results || []).map(r => {
+      if (r.link && !r.link.startsWith("http")) {
+        r.link = `https://www.ecfr.gov/${r.link.replace(/^\/+/, "")}`;
+      }
+      return r;
+    });
+
+    res.json({ ...response.data, results });
   } catch (e) {
     console.error("🚨 Search error:", e.message);
     res.status(500).json({ error: "Search failed" });
   }
 });
+
 
 // ===================== Search Count =====================
 app.get("/api/search/count", async (req, res) => {
