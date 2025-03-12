@@ -101,7 +101,7 @@ async function streamAndCountWords(url) {
   }
 }
 
-// ===================== Word Count by Agency (XML-based scoped version - FINAL CLEAN PATCHED) =====================
+// ===================== Word Count by Agency (XML-based scoped version - FINAL PATCHED + DUAL FIX PATH) =====================
 
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
   const sax = require("sax");
@@ -113,35 +113,25 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
   );
   if (!agency) return res.status(404).json({ error: "Agency not found" });
 
-  // 🔒 Hardcoded structure-heading match agencies
-  const headingMatchSlugs = new Set([
-    "federal-procurement-regulations-system",
-    "federal-property-management-regulations-system",
-    "federal-travel-regulation-system",
-    "department-of-defense",
-    "department-of-health-and-human-services",
-    "office-of-management-and-budget"
-  ]);
-
-  // Reassign refs for all (overwriting any broken ones)
+  // ✅ Final hardcoded patch block (2-path fix strategy)
   if (slug === "federal-procurement-regulations-system") {
-    agency.cfr_references = [{ title: 41 }];
+    agency.cfr_references = [{ title: 41, chapter: null }];
   } else if (slug === "federal-property-management-regulations-system") {
-    agency.cfr_references = [{ title: 41 }];
+    agency.cfr_references = [{ title: 41, chapter: null }];
   } else if (slug === "federal-travel-regulation-system") {
-    agency.cfr_references = [{ title: 41 }];
+    agency.cfr_references = [{ title: 41, chapter: null }];
   } else if (slug === "department-of-defense") {
-    agency.cfr_references = [{ title: 32 }];
+    agency.cfr_references = [{ title: 32, chapter: null }];
   } else if (slug === "department-of-health-and-human-services") {
     agency.cfr_references = [
       { title: 2, chapter: "III" },
       { title: 5, chapter: "XLV" },
-      { title: 45 },
+      { title: 45, chapter: null },
       { title: 48, chapter: "3" }
     ];
   } else if (slug === "office-of-management-and-budget") {
     agency.cfr_references = [
-      { title: 2 },
+      { title: 2, chapter: null },
       { title: 5, chapter: "III" },
       { title: 5, chapter: "LXXVII" },
       { title: 48, chapter: "99" }
@@ -156,11 +146,12 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
 
   for (const ref of refs) {
     const title = ref.title;
-    const chapter = ref.chapter || null;
-    const cacheKey = `agency-scope-${slug}-title-${title}-chapter-${chapter || "heading-match"}`;
-    const cachedCount = wordCountCache.get(cacheKey);
+    const chapter = ref.chapter;
+    const cacheKey = `agency-scope-${slug}-title-${title}-chapter-${chapter ?? "null"}`;
+    let cachedCount = wordCountCache.get(cacheKey);
+
     if (cachedCount !== undefined) {
-      breakdowns.push({ title, chapter: chapter || "heading-match", wordCount: cachedCount });
+      breakdowns.push({ title, chapter, wordCount: cachedCount });
       totalWords += cachedCount;
       continue;
     }
@@ -175,55 +166,66 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
       const structure = (await axios.get(structureUrl)).data;
 
       const sectionSet = new Set();
+      let matched = false;
 
-      const collectFromNode = (node) => {
-        if (node.type === "section") sectionSet.add(node.identifier);
-        if (node.children) node.children.forEach(collectFromNode);
-      };
+      const recurse = (node, inScope = false) => {
+        if (!node || typeof node !== "object") return;
 
-      // ✅ Path A: Heading match for known problematic agencies
-      if (headingMatchSlugs.has(slug)) {
-        const matchNodeByHeading = (node) => {
-          if (!node || typeof node !== "object") return null;
-          const heading = (node.heading || "").toLowerCase();
-          if (heading.includes(agency.name.toLowerCase())) return node;
-          if (node.children) {
-            for (const child of node.children) {
-              const result = matchNodeByHeading(child);
-              if (result) return result;
-            }
-          }
-          return null;
-        };
-        const matchedNode = matchNodeByHeading(structure);
-        if (matchedNode) collectFromNode(matchedNode);
-      } else {
-        // ✅ Path B: Normal match by chapter/subtitle identifier
-        const recurse = (node, inScope = false) => {
-          if (!node || typeof node !== "object") return;
+        // ✅ Dual Fix Path Logic
+        if (chapter) {
           if ((node.type === "chapter" || node.type === "subtitle") && node.identifier === chapter) {
             inScope = true;
+            matched = true;
           }
-          if (inScope && node.type === "section") sectionSet.add(node.identifier);
-          if (node.children) node.children.forEach((child) => recurse(child, inScope));
-        };
-        recurse(structure);
-      }
+        } else {
+          // Special fix for null-chapter nodes (Title 41 and others)
+          if (
+            (slug.includes("federal-procurement-regulations-system") ||
+             slug.includes("federal-property-management-regulations-system") ||
+             slug.includes("federal-travel-regulation-system")) &&
+            node.type === "subtitle"
+          ) {
+            inScope = true;
+            matched = true;
+          } else if (
+            (slug.includes("defense-department") ||
+             slug.includes("health-and-human-services") ||
+             slug.includes("management-and-budget-office")) &&
+            (node.type === "subtitle" || node.type === "chapter")
+          ) {
+            inScope = true;
+            matched = true;
+          }
+        }
+
+        if (inScope && node.type === "section") {
+          sectionSet.add(node.identifier);
+        }
+
+        if (node.children) node.children.forEach((child) => recurse(child, inScope));
+      };
+
+      recurse(structure);
 
       if (!sectionSet.size) {
-        console.warn(`⚠️ No sections found for Title ${title}, Chapter ${chapter || "[heading match]"}`);
-        breakdowns.push({ title, chapter: chapter || "heading-match", wordCount: 0 });
+        console.warn(`⚠️ No sections found for Title ${title}, Chapter ${chapter ?? "[heading match]"}`);
+        breakdowns.push({ title, chapter, wordCount: 0 });
         continue;
       }
 
-      // STEP 2: Stream XML and collect word count
+      // STEP 2: Stream XML and count words
       const xmlUrl = `${VERSIONER}/full/${issueDate}/title-${title}.xml`;
-      const response = await axios({ method: "GET", url: xmlUrl, responseType: "stream", timeout: 60000 });
-      const parser = sax.createStream(true);
+      const response = await axios({
+        method: "GET",
+        url: xmlUrl,
+        responseType: "stream",
+        timeout: 60000
+      });
 
+      const parser = sax.createStream(true);
       let currentSection = null;
-      let currentText = "";
       let captureText = false;
+      let currentText = "";
       let wordCount = 0;
       const stack = [];
 
@@ -254,15 +256,15 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
           const popped = stack.pop();
           if (popped.type === "section" && popped.number === currentSection) {
             wordCount += currentText.trim().split(/\s+/).filter(Boolean).length;
-            currentText = "";
             currentSection = null;
+            currentText = "";
           }
         }
       });
 
       parser.on("end", () => {
         wordCountCache.set(cacheKey, wordCount);
-        breakdowns.push({ title, chapter: chapter || "heading-match", wordCount });
+        breakdowns.push({ title, chapter, wordCount });
         totalWords += wordCount;
         if (ref === refs[refs.length - 1]) {
           res.json({ agency: agency.name, total: totalWords, breakdowns });
@@ -270,7 +272,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
       });
 
       parser.on("error", (err) => {
-        console.error(`🚨 XML parse error for ${agency.name}:`, err.message);
+        console.error(`🚨 XML parse error for agency ${agency.name}:`, err.message);
         res.status(500).json({ error: "XML parse error" });
       });
 
