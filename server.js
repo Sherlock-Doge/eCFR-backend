@@ -2,6 +2,9 @@ const express = require("express");
 const axios = require("axios");
 const NodeCache = require("node-cache");
 const sax = require("sax");
+const fs = require("fs"); //added to support/api/wordcount/agency-fast/:slug
+const path = require("path"); //added to support/api/wordcount/agency-fast/:slug
+
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -263,6 +266,107 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
     } catch (e) {
       console.error(`🚨 Error processing agency ${agency.name}:`, e.message);
     }
+  }
+});
+
+
+// =========================================================
+// ⚡ FAST Streaming XML Word Count by Agency (Experimental)
+// =========================================================
+app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
+  const slug = req.params.slug.toLowerCase();
+
+  try {
+    // Step 1: Load agencies.json
+    const agenciesPath = path.join(__dirname, 'data', 'agencies.json');
+    const agenciesData = JSON.parse(fs.readFileSync(agenciesPath, 'utf8'));
+    const agency = agenciesData.agencies.find(a => (a.slug || a.name.toLowerCase().replace(/\s+/g, '-')) === slug);
+
+    if (!agency || !agency.cfr_references || agency.cfr_references.length === 0) {
+      return res.status(404).json({ error: 'Agency or CFR references not found' });
+    }
+
+    // Step 2: Apply subtitle/chapter patch logic
+    const subtitleOverrides = {
+      "federal-procurement-regulations-system": { title: 41, type: "subtitle", identifier: "A" },
+      "federal-property-management-regulations-system": { title: 41, type: "subtitle", identifier: "C" },
+      "federal-travel-regulation-system": { title: 41, type: "subtitle", identifier: "F" },
+      "department-of-defense": { title: 32, type: "subtitle", identifier: "A" },
+      "department-of-health-and-human-services": { title: 45, type: "subtitle", identifier: "A" },
+      "office-of-management-and-budget": { title: 2, type: "subtitle", identifier: "A" }
+    };
+
+    let agencyRefs = agency.cfr_references;
+    if (subtitleOverrides[slug]) {
+      agencyRefs = [subtitleOverrides[slug]];
+    }
+
+    // Step 3: Stream parse XML and count
+    const xmlPath = path.join(__dirname, 'data', `title-${agencyRefs[0].title}.xml`);
+    const stream = fs.createReadStream(xmlPath);
+    const sax = require('sax');
+    const parser = sax.createStream(true, {});
+
+    let inMatch = false;
+    let matchDepth = 0;
+    let currentTitle = null;
+    let currentChapter = null;
+    let totalWords = 0;
+    let breakdowns = [];
+
+    parser.on('opentag', (node) => {
+      const type = node.attributes.TYPE;
+      const identifier = node.attributes.IDENTIFIER;
+      const titleAttr = node.attributes.TITLE;
+
+      if ((type === 'chapter' || type === 'subtitle') && agencyRefs.some(ref =>
+        ref.title.toString() === titleAttr &&
+        ref.type === type &&
+        ref.identifier === identifier
+      )) {
+        inMatch = true;
+        matchDepth = 1;
+        currentTitle = titleAttr;
+        currentChapter = identifier;
+        breakdowns.push({ title: currentTitle, chapter: currentChapter, wordCount: 0 });
+        return;
+      }
+
+      if (inMatch) matchDepth++;
+    });
+
+    parser.on('closetag', () => {
+      if (inMatch) matchDepth--;
+      if (inMatch && matchDepth === 0) inMatch = false;
+    });
+
+    parser.on('text', (text) => {
+      if (inMatch) {
+        const words = text.trim().split(/\s+/).filter(Boolean).length;
+        totalWords += words;
+        if (breakdowns.length > 0) {
+          breakdowns[breakdowns.length - 1].wordCount += words;
+        }
+      }
+    });
+
+    parser.on('end', () => {
+      res.json({
+        agency: agency.name,
+        total: totalWords,
+        breakdowns
+      });
+    });
+
+    parser.on('error', (err) => {
+      console.error("⚠️ SAX Parsing Error:", err);
+      res.status(500).json({ error: 'SAX parsing failed' });
+    });
+
+    stream.pipe(parser);
+  } catch (err) {
+    console.error("❌ Fast agency word count error:", err);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
