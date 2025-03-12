@@ -101,7 +101,7 @@ async function streamAndCountWords(url) {
   }
 }
 
-// ===================== Word Count by Agency (XML-based scoped version - FINAL PATCHED) =====================
+// ===================== Word Count by Agency (XML-based scoped version - FINAL PATCHED + BULLETPROOF RECURSE) =====================
 
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
   const sax = require("sax");
@@ -115,23 +115,23 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
 
   // ✅ Hardcoded CFR patch for known broken agencies
   if (slug === "federal-procurement-regulations-system") {
-    agency.cfr_references = [{ title: 41, chapter: "A" }];
+    agency.cfr_references = [{ title: 41, chapter: null }];
   } else if (slug === "federal-property-management-regulations-system") {
-    agency.cfr_references = [{ title: 41, chapter: "C" }];
+    agency.cfr_references = [{ title: 41, chapter: null }];
   } else if (slug === "federal-travel-regulation-system") {
-    agency.cfr_references = [{ title: 41, chapter: "F" }];
+    agency.cfr_references = [{ title: 41, chapter: null }];
   } else if (slug === "department-of-defense") {
-    agency.cfr_references = [{ title: 32, chapter: "A" }];
+    agency.cfr_references = [{ title: 32, chapter: null }];
   } else if (slug === "department-of-health-and-human-services") {
     agency.cfr_references = [
       { title: 2, chapter: "III" },
       { title: 5, chapter: "XLV" },
-      { title: 45, chapter: "A" },
+      { title: 45, chapter: null },
       { title: 48, chapter: "3" }
     ];
   } else if (slug === "office-of-management-and-budget") {
     agency.cfr_references = [
-      { title: 2, chapter: "A" },
+      { title: 2, chapter: null },
       { title: 5, chapter: "III" },
       { title: 5, chapter: "LXXVII" },
       { title: 48, chapter: "99" }
@@ -147,11 +147,11 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
   for (const ref of refs) {
     const title = ref.title;
     const chapter = ref.chapter;
-    const cacheKey = `agency-scope-${slug}-title-${title}-chapter-${chapter}`;
+    const cacheKey = `agency-scope-${slug}-title-${title}-chapter-${chapter || "fallback"}`;
     let cachedCount = wordCountCache.get(cacheKey);
 
     if (cachedCount !== undefined) {
-      breakdowns.push({ title, chapter, wordCount: cachedCount });
+      breakdowns.push({ title, chapter: chapter || "fallback", wordCount: cachedCount });
       totalWords += cachedCount;
       continue;
     }
@@ -167,24 +167,37 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
       const structure = (await axios.get(structureUrl)).data;
 
       const sectionSet = new Set();
+      let chapterMatched = false;
+      let fallbackAllowed = !chapter;
 
       const recurse = (node, inScope = false) => {
         if (!node || typeof node !== "object") return;
-        if (inScope && node.type === "section") sectionSet.add(node.identifier);
 
-        // ✅ Allow both chapter and subtitle as valid entry points
-        if ((node.type === "chapter" || node.type === "subtitle") && node.identifier === chapter) {
-          inScope = true;
+        // ✅ Match both chapter and subtitle entry points
+        if ((node.type === "chapter" || node.type === "subtitle")) {
+          if (chapter && node.identifier === chapter) {
+            inScope = true;
+            chapterMatched = true;
+          } else if (!chapter && !chapterMatched && fallbackAllowed && !inScope) {
+            inScope = true;
+            chapterMatched = true;
+          }
         }
 
-        if (node.children) node.children.forEach((child) => recurse(child, inScope));
+        if (inScope && node.type === "section") {
+          sectionSet.add(node.identifier);
+        }
+
+        if (node.children) {
+          node.children.forEach((child) => recurse(child, inScope));
+        }
       };
 
       recurse(structure);
 
       if (!sectionSet.size) {
         console.warn(`⚠️ No sections found for Title ${title}, Chapter ${chapter}`);
-        breakdowns.push({ title, chapter, wordCount: 0 });
+        breakdowns.push({ title, chapter: chapter || "fallback", wordCount: 0 });
         continue;
       }
 
@@ -242,7 +255,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
 
       parser.on("end", () => {
         wordCountCache.set(cacheKey, wordCount);
-        breakdowns.push({ title, chapter, wordCount });
+        breakdowns.push({ title, chapter: chapter || "fallback", wordCount });
         totalWords += wordCount;
 
         if (ref === refs[refs.length - 1]) {
