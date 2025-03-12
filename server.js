@@ -386,34 +386,34 @@ app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
 
 
 
-// ===================== Search (final, safe normalization) =====================
+// ===================== Search with Section Resolution =====================
 app.get("/api/search", async (req, res) => {
   try {
     const response = await axios.get(`${BASE_URL}/api/search/v1/results`, { params: req.query });
+    const results = response.data.results || [];
 
-    const results = (response.data.results || []).map(r => {
-      let link = r.link?.trim() || "";
+    // 🔗 Normalize ECFR links & Resolve Structure
+    const normalized = results.map(r => {
+      let resolvedLink = r.link || "";
 
-      // If link already starts with 'http', it's fully qualified — use it as-is
-      if (/^https?:\/\//i.test(link)) {
-        return { ...r, link };
+      // 🏹 Try to resolve via Section Index
+      if (r.headings?.section) {
+        const lookup = sectionIndex[r.headings.section.trim()];
+        if (lookup) {
+          resolvedLink = `https://www.ecfr.gov/current/title-${lookup.title}/part-${lookup.part}/section-${lookup.section}`;
+        }
       }
 
-      // If it's an ECFR-relative path, prepend domain cleanly
-      if (link.startsWith("/")) {
-        return { ...r, link: `https://www.ecfr.gov${link}` };
-      }
-
-      // If it's something malformed or empty, fallback
-      return { ...r, link: "https://www.ecfr.gov" };
+      return { ...r, link: resolvedLink };
     });
 
-    res.json({ ...response.data, results });
+    res.json({ ...response.data, results: normalized });
   } catch (e) {
     console.error("🚨 Search error:", e.message);
     res.status(500).json({ error: "Search failed" });
   }
 });
+
 
 
 
@@ -477,6 +477,72 @@ app.get("/api/search/suggestions", async (req, res) => {
     console.error("🚨 Metadata preload failed:", e.message);
   }
 })();
+
+
+// ===================== Section-Level Index Builder =====================
+let sectionIndex = {}; // 🔥 Fast in-memory lookup for section -> Title/Part/Chapter
+
+async function buildSectionIndex() {
+  console.log("📌 Building Section Index...");
+
+  try {
+    const titles = metadataCache.get("titlesMetadata") || [];
+
+    for (const title of titles) {
+      const titleNumber = title.number;
+      const xmlPath = path.join(__dirname, "data", `title-${titleNumber}.xml`);
+
+      if (!fs.existsSync(xmlPath)) {
+        console.warn(`⚠️ Missing XML: ${xmlPath} (Skipping Title ${titleNumber})`);
+        continue;
+      }
+
+      const stream = fs.createReadStream(xmlPath);
+      const parser = sax.createStream(true, {});
+
+      let currentPart = null;
+      let currentSection = null;
+      let currentChapter = null;
+
+      parser.on("opentag", (node) => {
+        const type = node.attributes.TYPE;
+        const identifier = node.attributes.IDENTIFIER;
+
+        if (type === "chapter") {
+          currentChapter = identifier;
+        }
+        if (type === "part") {
+          currentPart = identifier;
+        }
+        if (type === "section") {
+          currentSection = identifier;
+          if (currentPart && currentSection) {
+            const key = `§ ${currentSection}`;
+            sectionIndex[key] = {
+              title: titleNumber,
+              part: currentPart,
+              section: currentSection,
+            };
+          }
+        }
+      });
+
+      parser.on("end", () => {
+        console.log(`✅ Indexed Title ${titleNumber}`);
+      });
+
+      stream.pipe(parser);
+    }
+
+    console.log("🎯 Section Index Build Complete.");
+  } catch (err) {
+    console.error("🚨 Section Index Build Failed:", err);
+  }
+}
+
+// Trigger index build on startup
+buildSectionIndex();
+
 
 // ===================== Start Server =====================
 app.listen(PORT, () => {
