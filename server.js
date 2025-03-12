@@ -278,7 +278,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
     
       try {
         // Step 1: Load agencies from in-memory metadata cache
-    const agencies = metadataCache.get("agencies");
+    const agencies = metadataCache.get("agenciesMetadata");
     
     if (!agencies || !Array.isArray(agencies)) {
       return res.status(500).json({ error: "Agency metadata not available" });
