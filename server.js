@@ -386,47 +386,101 @@ app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
 
 
 
-// ===================== Search with #IamROOT Section Resolution =====================
-app.get("/api/search", async (req, res) => {
+// ===================== 🐿️ Flying Cyber Squirrel Search Engine =====================
+// Real-time XML Structure-Aware Search (Full Tree Traversal)
+app.get("/api/search/cyber-squirrel", async (req, res) => {
+  const query = (req.query.q || "").toLowerCase().trim();
+  const titleFilter = req.query.title ? parseInt(req.query.title) : null;
+  if (!query) return res.json({ results: [] });
+
+  const matchedResults = [];
+
   try {
-    const response = await axios.get(`${BASE_URL}/api/search/v1/results`, { params: req.query });
-    const results = response.data.results || [];
+    const titles = metadataCache.get("titlesMetadata") || [];
 
-    const normalized = results.map(r => {
-      let resolvedLink = r.link || "";
+    for (const titleMeta of titles) {
+      const titleNumber = parseInt(titleMeta.number);
+      if (titleFilter && titleNumber !== titleFilter) continue;
 
-      // 1️⃣ Try to resolve via section index directly using headings.section
-      let lookupKey = r.headings?.section?.trim();
+      const xmlPath = path.join(__dirname, 'data', `title-${titleNumber}.xml`);
+      if (!fs.existsSync(xmlPath)) {
+        console.warn(`⚠️ XML missing for Title ${titleNumber}. Skipping...`);
+        continue;
+      }
 
-      // 2️⃣ Fallback: try to parse a section reference from r.title (e.g., "§ 13.1" or "13.1")
-      if (!lookupKey && r.title) {
-        const sectionMatch = r.title.match(/§?\s?(\d{1,3}\.\d{1,4})/); // match "§ 13.1"
-        if (sectionMatch) {
-          lookupKey = `§ ${sectionMatch[1]}`;
+      const stream = fs.createReadStream(xmlPath);
+      const parser = sax.createStream(true, {});
+      let currentSection = null;
+      let currentTextBuffer = "";
+      let inText = false;
+
+      parser.on("opentag", (node) => {
+        const type = node.attributes.TYPE;
+        const identifier = node.attributes.IDENTIFIER;
+        const heading = node.attributes.HEADING;
+
+        if (type === "section") {
+          currentSection = {
+            section: identifier,
+            heading: heading || "",
+            content: "",
+            match: false,
+            title: titleNumber,
+            url: `https://www.ecfr.gov/current/title-${titleNumber}/section-${identifier}`
+          };
         }
-      }
 
-      // 3️⃣ Try to resolve a structural URL if we have a lookup key
-      if (lookupKey && sectionIndex[lookupKey]) {
-        const info = sectionIndex[lookupKey];
-        resolvedLink = `https://www.ecfr.gov/current/title-${info.title}/part-${info.part}/section-${info.section}`;
-      }
+        if (node.name === "TEXT") {
+          inText = true;
+          currentTextBuffer = "";
+        }
+      });
 
-      return {
-        ...r,
-        link: resolvedLink
-      };
-    });
+      parser.on("text", (text) => {
+        if (inText) currentTextBuffer += text;
+      });
 
-    res.json({ ...response.data, results: normalized });
-  } catch (e) {
-    console.error("🚨 Search error:", e.message);
+      parser.on("closetag", (name) => {
+        if (name === "TEXT") {
+          inText = false;
+          if (currentSection) {
+            currentSection.content += currentTextBuffer;
+            if (currentTextBuffer.toLowerCase().includes(query)) {
+              currentSection.match = true;
+            }
+          }
+        }
+
+        if (name === "SECTION" && currentSection) {
+          if (currentSection.match) {
+            matchedResults.push({
+              section: currentSection.section,
+              heading: currentSection.heading,
+              title: `Title ${currentSection.title}`,
+              excerpt: currentSection.content.trim().substring(0, 500) + "...",
+              link: currentSection.url
+            });
+          }
+          currentSection = null;
+        }
+      });
+
+      parser.on("end", () => {
+        // no-op — final JSON is sent after all streams finish
+      });
+
+      await new Promise((resolve, reject) => {
+        parser.on("error", reject);
+        stream.pipe(parser).on("end", resolve);
+      });
+    }
+
+    res.json({ results: matchedResults });
+  } catch (err) {
+    console.error("💥 Cyber Squirrel Error:", err);
     res.status(500).json({ error: "Search failed" });
   }
 });
-
-
-
 
 
 // ===================== Search Count =====================
@@ -484,77 +538,14 @@ app.get("/api/search/suggestions", async (req, res) => {
     const agenciesRes = await axios.get(`${ADMIN}/agencies.json`);
     const agencies = agenciesRes.data.agencies || agenciesRes.data;
     metadataCache.set("agenciesMetadata", agencies);
-    console.log("✅ Metadata preload complete.");
+
+    console.log("✅ Metadata preload complete");
+    console.log("🛫 Cyber Squirrel Search Engine initialized"); 
+
   } catch (e) {
     console.error("🚨 Metadata preload failed:", e.message);
   }
 })();
-
-
-// ===================== Section-Level Index Builder =====================
-let sectionIndex = {}; // 🔥 Fast in-memory lookup for section -> Title/Part/Chapter
-
-async function buildSectionIndex() {
-  console.log("📌 Building Section Index...");
-
-  try {
-    const titles = metadataCache.get("titlesMetadata") || [];
-
-    for (const title of titles) {
-      const titleNumber = title.number;
-      const xmlPath = path.join(__dirname, "data", `title-${titleNumber}.xml`);
-
-      if (!fs.existsSync(xmlPath)) {
-        console.warn(`⚠️ Missing XML: ${xmlPath} (Skipping Title ${titleNumber})`);
-        continue;
-      }
-
-      const stream = fs.createReadStream(xmlPath);
-      const parser = sax.createStream(true, {});
-
-      let currentPart = null;
-      let currentSection = null;
-      let currentChapter = null;
-
-      parser.on("opentag", (node) => {
-        const type = node.attributes.TYPE;
-        const identifier = node.attributes.IDENTIFIER;
-
-        if (type === "chapter") {
-          currentChapter = identifier;
-        }
-        if (type === "part") {
-          currentPart = identifier;
-        }
-        if (type === "section") {
-          currentSection = identifier;
-          if (currentPart && currentSection) {
-            const key = `§ ${currentSection}`;
-            sectionIndex[key] = {
-              title: titleNumber,
-              part: currentPart,
-              section: currentSection,
-            };
-          }
-        }
-      });
-
-      parser.on("end", () => {
-        console.log(`✅ Indexed Title ${titleNumber}`);
-      });
-
-      stream.pipe(parser);
-    }
-
-    console.log("🎯 Section Index Build Complete.");
-  } catch (err) {
-    console.error("🚨 Section Index Build Failed:", err);
-  }
-}
-
-// Trigger index build on startup
-buildSectionIndex();
-
 
 // ===================== Start Server =====================
 app.listen(PORT, () => {
