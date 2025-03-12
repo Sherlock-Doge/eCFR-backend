@@ -101,7 +101,7 @@ async function streamAndCountWords(url) {
   }
 }
 
-// ===================== Word Count by Agency (XML-based FINAL FIXED version) =====================
+// ===================== Word Count by Agency (XML-based scoped version - FINAL with Title 41 subtitle drill patch) =====================
 
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
   const sax = require("sax");
@@ -113,28 +113,28 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
   );
   if (!agency) return res.status(404).json({ error: "Agency not found" });
 
-  // ✅ Final hardcoded patch with useAsRoot and type indicators
+  // ✅ Hardcoded CFR patch for six broken agencies
   if (slug === "federal-procurement-regulations-system") {
-    agency.cfr_references = [{ title: 41, chapter: null, type: "subtitle", useAsRoot: true }];
+    agency.cfr_references = [{ title: 41, chapter: null, matchType: "subtitle", useAsRoot: true }];
   } else if (slug === "federal-property-management-regulations-system") {
-    agency.cfr_references = [{ title: 41, chapter: null, type: "subtitle", useAsRoot: true }];
+    agency.cfr_references = [{ title: 41, chapter: null, matchType: "subtitle", useAsRoot: true }];
   } else if (slug === "federal-travel-regulation-system") {
-    agency.cfr_references = [{ title: 41, chapter: null, type: "subtitle", useAsRoot: true }];
+    agency.cfr_references = [{ title: 41, chapter: null, matchType: "subtitle", useAsRoot: true }];
   } else if (slug === "department-of-defense") {
-    agency.cfr_references = [{ title: 32, chapter: null, type: "subtitle", useAsRoot: true }];
+    agency.cfr_references = [{ title: 32, chapter: null, matchType: "subtitle", useAsRoot: true }];
   } else if (slug === "department-of-health-and-human-services") {
     agency.cfr_references = [
-      { title: 2, chapter: "III", type: "chapter" },
-      { title: 5, chapter: "XLV", type: "chapter" },
-      { title: 45, chapter: null, type: "subtitle", useAsRoot: true },
-      { title: 48, chapter: "3", type: "chapter" }
+      { title: 2, chapter: "III" },
+      { title: 5, chapter: "XLV" },
+      { title: 45, chapter: null, matchType: "subtitle", useAsRoot: true },
+      { title: 48, chapter: "3" }
     ];
   } else if (slug === "office-of-management-and-budget") {
     agency.cfr_references = [
-      { title: 2, chapter: null, type: "subtitle", useAsRoot: true },
-      { title: 5, chapter: "III", type: "chapter" },
-      { title: 5, chapter: "LXXVII", type: "chapter" },
-      { title: 48, chapter: "99", type: "chapter" }
+      { title: 2, chapter: null, matchType: "subtitle", useAsRoot: true },
+      { title: 5, chapter: "III" },
+      { title: 5, chapter: "LXXVII" },
+      { title: 48, chapter: "99" }
     ];
   }
 
@@ -147,13 +147,13 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
   for (const ref of refs) {
     const title = ref.title;
     const chapter = ref.chapter;
-    const matchType = ref.type || "chapter";
+    const matchType = ref.matchType || "chapter";
     const useAsRoot = ref.useAsRoot || false;
-    const cacheKey = `agency-scope-${slug}-title-${title}-chapter-${chapter || "root"}`;
+    const cacheKey = `agency-scope-${slug}-title-${title}-chapter-${chapter || "fallback"}`;
     let cachedCount = wordCountCache.get(cacheKey);
 
     if (cachedCount !== undefined) {
-      breakdowns.push({ title, chapter: chapter || "", wordCount: cachedCount });
+      breakdowns.push({ title, chapter: chapter || null, wordCount: cachedCount });
       totalWords += cachedCount;
       continue;
     }
@@ -164,41 +164,58 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
       const issueDate = meta?.latest_issue_date;
       if (!issueDate) continue;
 
-      // STEP 1: Structure JSON traversal → collect section identifiers
       const structureUrl = `${VERSIONER}/structure/${issueDate}/title-${title}.json`;
       const structure = (await axios.get(structureUrl)).data;
 
       const sectionSet = new Set();
       let chapterMatched = false;
 
-      const recurse = (node, inScope = false) => {
-        if (!node || typeof node !== "object") return;
+      // STEP 1: Deep drill override for useAsRoot refs
+      if (useAsRoot && !chapter) {
+        const findMatchNode = (node) => {
+          if (!node || typeof node !== "object") return null;
+          if (node.type === matchType) return node;
+          if (node.children) {
+            for (const child of node.children) {
+              const result = findMatchNode(child);
+              if (result) return result;
+            }
+          }
+          return null;
+        };
 
-        if (!chapterMatched && node.type === matchType) {
-          if (useAsRoot || !chapter || node.identifier === chapter) {
+        const matchedRoot = findMatchNode(structure);
+        if (matchedRoot) {
+          const collectSections = (node) => {
+            if (node.type === "section") sectionSet.add(node.identifier);
+            if (node.children) node.children.forEach(collectSections);
+          };
+          collectSections(matchedRoot);
+          chapterMatched = true;
+        }
+      }
+
+      // STEP 2: Normal recurse for all other refs
+      if (!chapterMatched) {
+        const recurse = (node, inScope = false) => {
+          if (!node || typeof node !== "object") return;
+          if ((node.type === "chapter" || node.type === "subtitle") && node.identifier === chapter) {
             inScope = true;
             chapterMatched = true;
           }
-        }
-
-        if (inScope && node.type === "section") {
-          sectionSet.add(node.identifier);
-        }
-
-        if (node.children) {
-          node.children.forEach((child) => recurse(child, inScope));
-        }
-      };
-
-      recurse(structure);
+          if (inScope && node.type === "section") sectionSet.add(node.identifier);
+          if (node.children) node.children.forEach((child) => recurse(child, inScope));
+        };
+        recurse(structure);
+      }
 
       if (!sectionSet.size) {
         console.warn(`⚠️ No sections found for Title ${title}, Chapter ${chapter}, Type ${matchType}`);
-        breakdowns.push({ title, chapter: chapter || "", wordCount: 0 });
+        breakdowns.push({ title, chapter: chapter || null, wordCount: 0 });
         continue;
       }
 
-      // STEP 2: Stream XML and collect word count for matched sections
+      // STEP 3: Stream XML and count words
       const xmlUrl = `${VERSIONER}/full/${issueDate}/title-${title}.xml`;
       const response = await axios({
         method: "GET",
@@ -249,8 +266,9 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
 
       parser.on("end", () => {
         wordCountCache.set(cacheKey, wordCount);
-        breakdowns.push({ title, chapter: chapter || "", wordCount });
+        breakdowns.push({ title, chapter: chapter || null, wordCount });
         totalWords += wordCount;
+
         if (ref === refs[refs.length - 1]) {
           res.json({ agency: agency.name, total: totalWords, breakdowns });
         }
