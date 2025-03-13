@@ -271,33 +271,31 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
 });
 
 
-// ===================== 🐿️ Cyber Squirrel Search Engine — Final Clean Unified Version =====================
+// ===================== 🐿️ Cyber Squirrel Search Engine — Final Production Version with Scoring & Sorting =====================
 app.get("/api/search/cyber-squirrel", async (req, res) => {
-  // STEP 1: Extract query and filters from URL
   const query = (req.query.q || "").toLowerCase().trim();
   const titleFilter = req.query.title ? parseInt(req.query.title) : null;
 
-  // ✅ SAFELY normalize agency slug input, whether string or array
   const rawAgencyInput = req.query["agency_slugs[]"] || req.query.agency_slugs || req.query.agency;
   const rawSlug = Array.isArray(rawAgencyInput) ? rawAgencyInput[0] : rawAgencyInput;
-  const normalizeSlug = (val) => (typeof val === "string" ? val.toLowerCase().trim().replace(/\s+/g, "-") : "");
+  const normalizeSlug = (val) =>
+    typeof val === "string" ? val.toLowerCase().trim().replace(/\s+/g, "-") : "";
   const agencyFilter = normalizeSlug(rawSlug);
 
   const matchedResults = [];
   console.log(`🛫 Cyber Squirrel Search → Query: "${query}" | Title: ${titleFilter || "None"} | Agency: ${agencyFilter || "None"}`);
 
-  // STEP 2: If nothing entered at all, exit immediately
+  // STEP 1: Exit early if no input
   if (!query && !titleFilter && !agencyFilter) {
     console.log("⚠️ Empty query and no filters — exiting.");
     return res.json({ results: [] });
   }
 
-  // STEP 3: TITLE filter only → return title root metadata only
+  // STEP 2: Title-only filter mode
   if (!query && titleFilter) {
     const titles = metadataCache.get("titlesMetadata") || [];
     const titleMeta = titles.find(t => parseInt(t.number) === titleFilter);
     if (titleMeta) {
-      console.log(`📘 Title-only mode → returning Title ${titleFilter} root`);
       matchedResults.push({
         section: `Title ${titleFilter}`,
         heading: titleMeta.name || "",
@@ -308,21 +306,16 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
     return res.json({ results: matchedResults });
   }
 
-  // STEP 4: AGENCY filter only (no keyword) → return CFR references
+  // STEP 3: Agency-only mode (no keyword)
   if (!query && agencyFilter) {
     const agencies = metadataCache.get("agenciesMetadata") || [];
-    const agency = agencies.find(
-      a => a.slug === agencyFilter || normalizeSlug(a.name) === agencyFilter
-    );
-
-    console.log("🔍 DEBUG AGENCY OBJECT →", JSON.stringify(agency, null, 2));
+    const agency = agencies.find(a => a.slug === agencyFilter || normalizeSlug(a.name) === agencyFilter);
     if (!agency) {
       console.warn("❌ Agency not found — exiting.");
       return res.json({ results: [] });
     }
 
     if (agency.cfr_references?.length > 0) {
-      console.log(`📦 Agency-only mode: ${agency.name} (${agency.cfr_references.length} CFR refs)`);
       agency.cfr_references.forEach(ref => {
         const title = ref.title;
         const chapter = ref.chapter || null;
@@ -345,23 +338,18 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
     return res.json({ results: matchedResults });
   }
 
-  // STEP 5: KEYWORD SEARCH mode (with optional title/agency filters)
+  // STEP 4: Keyword search mode (with or without filters)
   const titles = metadataCache.get("titlesMetadata") || [];
   const agencies = metadataCache.get("agenciesMetadata") || [];
   const scopedAgencyRefs = [];
 
-  // Match agency object exactly like word count endpoint does
   let agency = null;
   if (agencyFilter) {
-    agency = agencies.find(
-      a => a.slug === agencyFilter || normalizeSlug(a.name) === agencyFilter
-    );
-    if (!agency) {
-      console.warn("❌ Agency not found — skipping agency scope");
-    } else if (agency.cfr_references?.length > 0) {
+    agency = agencies.find(a => a.slug === agencyFilter || normalizeSlug(a.name) === agencyFilter);
+    if (agency?.cfr_references?.length > 0) {
       scopedAgencyRefs.push(...agency.cfr_references);
     } else {
-      console.warn("⚠️ Agency matched but has no CFR references");
+      console.warn("⚠️ Agency not found or no CFR refs — skipping scope");
     }
   }
 
@@ -375,14 +363,10 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
       }
 
       const issueDate = titleMeta.latest_issue_date || titleMeta.up_to_date_as_of;
-      if (!issueDate) {
-        console.warn(`⚠️ Missing issueDate for Title ${titleNumber} — skipping`);
-        continue;
-      }
+      if (!issueDate) continue;
 
       const structureUrl = `${VERSIONER}/structure/${issueDate}/title-${titleNumber}.json`;
       const structure = (await axios.get(structureUrl)).data;
-      console.log(`📥 Structure loaded for Title ${titleNumber}`);
 
       const sectionSet = new Set();
       const collectSections = (node) => {
@@ -410,18 +394,13 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
             : ref.chapter
               ? findNode(structure, "chapter", ref.chapter)
               : structure;
-          if (entryNode) {
-            collectSections(entryNode);
-          }
+          if (entryNode) collectSections(entryNode);
         });
       } else {
         collectSections(structure);
       }
 
-      if (!sectionSet.size) {
-        console.warn(`⚠️ No sections for Title ${titleNumber} — skipping SAX`);
-        continue;
-      }
+      if (!sectionSet.size) continue;
 
       const xmlUrl = `${VERSIONER}/full/${issueDate}/title-${titleNumber}.xml`;
       const response = await axios({
@@ -447,7 +426,10 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
               heading: attributes.HEADING || "",
               title: titleNumber,
               content: "",
-              url: `https://www.ecfr.gov/current/title-${titleNumber}/section-${attributes.N}`
+              url: `https://www.ecfr.gov/current/title-${titleNumber}/section-${attributes.N}`,
+              matchType: "",
+              relevanceScore: 0,
+              issueDate: issueDate
             };
             currentText = "";
           }
@@ -466,17 +448,24 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
         if (tag.startsWith("DIV") && stack.length > 0) {
           const popped = stack.pop();
           if (popped.type === "section" && currentSection && popped.number === currentSection.section) {
-            const matchFound = currentText.toLowerCase().includes(query) || currentSection.heading.toLowerCase().includes(query);
-            if (matchFound) {
+            const textLower = currentText.toLowerCase();
+            const headingLower = currentSection.heading.toLowerCase();
+            const isHeadingMatch = headingLower.includes(query);
+            const isBodyMatch = textLower.includes(query);
+            if (isHeadingMatch || isBodyMatch) {
               currentSection.content = currentText.trim();
+              currentSection.relevanceScore = isHeadingMatch ? 2 : 1;
+              currentSection.matchType = isHeadingMatch ? "Heading Match" : "Body Text Match";
+
               matchedResults.push({
                 section: currentSection.section,
                 heading: currentSection.heading,
                 title: `Title ${currentSection.title}`,
                 excerpt: currentSection.content.substring(0, 500) + "...",
-                link: currentSection.url
+                link: currentSection.url,
+                matchType: currentSection.matchType,
+                issueDate: currentSection.issueDate
               });
-              console.log(`✅ MATCH in Section ${currentSection.section} (Title ${titleNumber})`);
             }
             currentSection = null;
             currentText = "";
@@ -484,16 +473,21 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
         }
       });
 
-      parser.on("end", () => console.log(`✅ SAX finished for Title ${titleNumber}`));
       parser.on("error", (err) => console.error(`❌ SAX error Title ${titleNumber}:`, err.message));
-
       await new Promise((resolve, reject) =>
         response.data.pipe(parser).on("end", resolve).on("error", reject)
       );
     }
 
-    console.log(`🎯 Search Done → ${matchedResults.length} matches`);
-    res.json({ results: matchedResults });
+    // Final ordering by relevanceScore (2 → 1) then by section number
+    const finalResults = matchedResults.sort((a, b) => {
+      const scoreDiff = (b.relevanceScore || 0) - (a.relevanceScore || 0);
+      if (scoreDiff !== 0) return scoreDiff;
+      return a.section.localeCompare(b.section);
+    });
+
+    console.log(`🎯 Search Done → ${finalResults.length} matches`);
+    res.json({ results: finalResults });
   } catch (err) {
     console.error("🔥 Search engine failure:", err.message);
     res.status(500).json({ error: "Search engine failure." });
