@@ -390,10 +390,12 @@ app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
 app.get("/api/search/cyber-squirrel", async (req, res) => {
   const query = (req.query.q || "").toLowerCase().trim();
   const titleFilter = req.query.title ? parseInt(req.query.title) : null;
-  if (!query) {
-    console.log("⚠️ Empty query received. Returning empty results.");
-    return res.json({ results: [] });
-  }
+  const filtersOnly = !query && (titleFilter || req.query["agency_slugs[]"] || req.query.last_modified_on_or_after || req.query.last_modified_on_or_before);
+if (!query && !filtersOnly) {
+  console.log("⚠️ Empty query and no filters — skipping search.");
+  return res.json({ results: [] });
+}
+
 
   console.log(`🛫 Cyber Squirrel Internal Search → Query: "${query}" | Title Filter: ${titleFilter || "None"}`);
   const matchedResults = [];
