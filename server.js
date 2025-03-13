@@ -386,7 +386,7 @@ app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
 
 
 
-// ===================== 🐿️ Cyber Squirrel Search Engine — Final Scoped + Clean Model =====================
+// ===================== 🐿️ Cyber Squirrel Search Engine — Bulletproof Scoped Final Version =====================
 app.get("/api/search/cyber-squirrel", async (req, res) => {
   const query = (req.query.q || "").toLowerCase().trim();
   const titleFilter = req.query.title ? parseInt(req.query.title) : null;
@@ -395,15 +395,17 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
 
   console.log(`🛫 Cyber Squirrel Internal Search → Query: "${query}" | Title: ${titleFilter || "None"} | Agency: ${agencyFilter || "None"}`);
 
-  const filtersOnly = !query && !titleFilter && !agencyFilter;
-  if (filtersOnly) {
-    console.log("⚠️ No query and no filters — skipping.");
+  const titles = metadataCache.get("titlesMetadata") || [];
+  const agencies = metadataCache.get("agenciesMetadata") || [];
+
+  // ✅ No query + no filters → abort early
+  if (!query && !titleFilter && !agencyFilter) {
+    console.log("⚠️ No query and no filters — skipping search.");
     return res.json({ results: [] });
   }
 
-  // ✅ Title Filter only (no query)
+  // ✅ Title Filter only
   if (!query && titleFilter) {
-    const titles = metadataCache.get("titlesMetadata") || [];
     const titleMeta = titles.find(t => parseInt(t.number) === titleFilter);
     if (titleMeta) {
       matchedResults.push({
@@ -416,9 +418,8 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
     return res.json({ results: matchedResults });
   }
 
-  // ✅ Agency Filter only (no query) — RETURN CFR REFERENCE LINKS ONLY
+  // ✅ Agency Filter only → return CFR metadata only, DO NOT PARSE ANYTHING
   if (!query && agencyFilter) {
-    const agencies = metadataCache.get("agenciesMetadata") || [];
     const agency = agencies.find(a => a.slug === agencyFilter || a.name.toLowerCase().replace(/\s+/g, "-") === agencyFilter);
     if (agency?.cfr_references?.length > 0) {
       agency.cfr_references.forEach(ref => {
@@ -430,7 +431,6 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
           : chapter
             ? `https://www.ecfr.gov/current/title-${title}/chapter-${chapter}`
             : `https://www.ecfr.gov/current/title-${title}`;
-
         matchedResults.push({
           section: agency.name,
           heading: `CFR Reference: Title ${title}${subtitle ? ` Subtitle ${subtitle}` : chapter ? ` Chapter ${chapter}` : ""}`,
@@ -442,11 +442,9 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
     return res.json({ results: matchedResults });
   }
 
-  // ✅ QUERY MODE — scoped parsing
-  const agencies = metadataCache.get("agenciesMetadata") || [];
-  const titles = metadataCache.get("titlesMetadata") || [];
+  // ✅ If we get here, we have a query, possibly scoped by agency and/or title
+  // Build scopedTitleSet and sectionSet per agencyFilter
   const scopedAgencyRefs = [];
-
   if (agencyFilter) {
     const agency = agencies.find(a => a.slug === agencyFilter || a.name.toLowerCase().replace(/\s+/g, "-") === agencyFilter);
     if (agency?.cfr_references?.length > 0) {
@@ -466,7 +464,6 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
       const structureUrl = `${VERSIONER}/structure/${issueDate}/title-${titleNumber}.json`;
       const structure = (await axios.get(structureUrl)).data;
 
-      // ✅ Collect sections scoped to agency chapter/subtitle
       const sectionSet = new Set();
 
       const collectSections = (node) => {
@@ -474,30 +471,31 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
         if (node.children) node.children.forEach(collectSections);
       };
 
-      const findNode = (node, matchType, matchId) => {
+      const findMatchNode = (node, matchType, matchId) => {
         if (!node || typeof node !== "object") return null;
         if (node.type === matchType && node.identifier === matchId) return node;
         if (node.children) {
           for (const child of node.children) {
-            const result = findNode(child, matchType, matchId);
+            const result = findMatchNode(child, matchType, matchId);
             if (result) return result;
           }
         }
         return null;
       };
 
+      // ✅ Proper sectionSet scoping
       if (agencyFilter && scopedAgencyRefs.length > 0) {
-        const refs = scopedAgencyRefs.filter(ref => ref.title === titleNumber);
-        for (const ref of refs) {
+        const matchingRefs = scopedAgencyRefs.filter(ref => ref.title === titleNumber);
+        matchingRefs.forEach(ref => {
           const entryNode = ref.subtitle
-            ? findNode(structure, "subtitle", ref.subtitle)
+            ? findMatchNode(structure, "subtitle", ref.subtitle)
             : ref.chapter
-              ? findNode(structure, "chapter", ref.chapter)
+              ? findMatchNode(structure, "chapter", ref.chapter)
               : structure;
           if (entryNode) collectSections(entryNode);
-        }
+        });
       } else {
-        collectSections(structure); // fallback full traversal only if no agency
+        collectSections(structure);
       }
 
       if (!sectionSet.size) continue;
@@ -514,8 +512,8 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
 
       const parser = sax.createStream(true);
       let currentSection = null;
-      let captureText = false;
       let currentText = "";
+      let captureText = false;
       const stack = [];
 
       parser.on("opentag", (node) => {
@@ -539,9 +537,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
       });
 
       parser.on("text", (text) => {
-        if (captureText && currentSection) {
-          currentText += text.trim() + " ";
-        }
+        if (captureText && currentSection) currentText += text.trim() + " ";
       });
 
       parser.on("closetag", (tag) => {
@@ -552,7 +548,6 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
             const matchFound =
               currentText.toLowerCase().includes(query) ||
               currentSection.heading.toLowerCase().includes(query);
-
             if (matchFound) {
               currentSection.content = currentText.trim();
               matchedResults.push({
@@ -564,23 +559,22 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
               });
               console.log(`✅ MATCH FOUND in Section ${currentSection.section} (Title ${titleNumber})`);
             }
-
             currentSection = null;
             currentText = "";
           }
         }
       });
 
-      parser.on("end", () => console.log(`✅ Finished SAX Title ${titleNumber}`));
-      parser.on("error", (err) => console.error(`❌ SAX Error Title ${titleNumber}: ${err.message}`));
+      parser.on("end", () => console.log(`✅ SAX Complete for Title ${titleNumber}`));
+      parser.on("error", err => console.error(`❌ SAX Error Title ${titleNumber}: ${err.message}`));
       await new Promise((resolve, reject) => response.data.pipe(parser).on("end", resolve).on("error", reject));
     }
 
-    console.log(`🎯 Cyber Squirrel Done → ${matchedResults.length} matches.`);
+    console.log(`🎯 Cyber Squirrel Search Completed → ${matchedResults.length} matches`);
     res.json({ results: matchedResults });
   } catch (err) {
-    console.error("💥 Search Engine Failure:", err.message);
-    res.status(500).json({ error: "Search backend failure" });
+    console.error("💥 Final Search Engine Error:", err.message);
+    res.status(500).json({ error: "Internal Search Error" });
   }
 });
 
