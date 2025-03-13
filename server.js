@@ -386,26 +386,59 @@ app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
 
 
 
-// ===================== 🐿️ Cyber Squirrel Search Engine — Final Rabbit Shucker Model =====================
+// ===================== 🐿️ Cyber Squirrel Search Engine — Final Rabbit Shucker Model (Root Result Enhanced) =====================
 app.get("/api/search/cyber-squirrel", async (req, res) => {
   const query = (req.query.q || "").toLowerCase().trim();
   const titleFilter = req.query.title ? parseInt(req.query.title) : null;
-
-  // ✅ NEW: Robust agency filter detection
   const agencyFilter = req.query["agency_slugs[]"] || req.query.agency_slugs || req.query.agency;
-
-  // ✅ NEW: Proper filtersOnly logic
   const filtersOnly = !query && (titleFilter || agencyFilter || req.query.last_modified_on_or_after || req.query.last_modified_on_or_before);
 
-  // ✅ Abort only if nothing at all is selected
   if (!query && !filtersOnly) {
     console.log("⚠️ Empty query and no filters — skipping search.");
     return res.json({ results: [] });
   }
 
-  console.log(`🛫 Cyber Squirrel Internal Search → Query: "${query}" | Title Filter: ${titleFilter || "None"} | Agency Filter: ${agencyFilter ? "Present" : "None"}`);
+  console.log(`🛫 Cyber Squirrel Internal Search → Query: "${query}" | Title Filter: ${titleFilter || "None"} | Agency Filter: ${agencyFilter || "None"}`);
   const matchedResults = [];
 
+  // ✅ Prepend top result if title filter is set
+  if (!query && titleFilter) {
+    const titles = metadataCache.get("titlesMetadata") || [];
+    const titleMeta = titles.find(t => parseInt(t.number) === titleFilter);
+    if (titleMeta) {
+      matchedResults.push({
+        section: `Title ${titleFilter}`,
+        heading: titleMeta.name || "",
+        excerpt: "Root of selected title.",
+        link: `https://www.ecfr.gov/current/title-${titleFilter}`
+      });
+    }
+  }
+
+  // ✅ Prepend top result if agency filter is set
+  if (!query && agencyFilter) {
+    const agencies = metadataCache.get("agenciesMetadata") || [];
+    const agency = agencies.find(a => a.slug === agencyFilter || a.name.toLowerCase().replace(/\s+/g, "-") === agencyFilter);
+    if (agency && agency.cfr_references && agency.cfr_references.length > 0) {
+      for (const ref of agency.cfr_references) {
+        const title = ref.title;
+        const chapter = ref.chapter || null;
+        const subtitle = ref.subtitle || null;
+        const url = subtitle
+          ? `https://www.ecfr.gov/current/title-${title}/subtitle-${subtitle}`
+          : chapter
+            ? `https://www.ecfr.gov/current/title-${title}/chapter-${chapter}`
+            : `https://www.ecfr.gov/current/title-${title}`;
+
+        matchedResults.push({
+          section: agency.name,
+          heading: `CFR Reference: Title ${title}${subtitle ? ` Subtitle ${subtitle}` : chapter ? ` Chapter ${chapter}` : ""}`,
+          excerpt: "Root of selected agency CFR reference.",
+          link: url
+        });
+      }
+    }
+  }
 
   try {
     const titles = metadataCache.get("titlesMetadata") || [];
@@ -530,6 +563,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
     res.status(500).json({ error: "Search failed" });
   }
 });
+
 
 
 // ===================== Search Count =====================
