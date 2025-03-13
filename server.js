@@ -496,7 +496,9 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
     res.json({ results: matchedResults });
   } catch (err) {
     console.error("🔥 Search Failure:", err.message);
-    res.status(500).json({ error: "Searc
+    res.status(500).json({ error: "Search engine failure." });
+  }
+});
 
 
 // ===================== Search Count =====================
