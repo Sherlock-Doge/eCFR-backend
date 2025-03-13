@@ -386,7 +386,7 @@ app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
 
 
 
-// ===================== 🐿️ Flying Cyber Squirrel Search Engine (Final Polished Form) =====================
+// ===================== 🐿️ Flying Cyber Squirrel Search Engine (Final Polished Form - Stream Fix Applied) =====================
 app.get("/api/search/cyber-squirrel", async (req, res) => {
   const query = (req.query.q || "").toLowerCase().trim();
   const titleFilter = req.query.title ? parseInt(req.query.title) : null;
@@ -414,13 +414,29 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
 
       const streamUrl = `${VERSIONER}/full/${issueDate}/title-${titleNumber}.xml`;
       console.log(`📡 Streaming XML from: ${streamUrl}`);
-      const response = await axios.get(streamUrl, { responseType: "stream" });
+
+      const response = await axios.get(streamUrl, {
+        responseType: "stream",
+        decompress: true,
+        headers: {
+          "Accept-Encoding": "gzip, deflate, br"
+        }
+      });
 
       const parser = sax.createStream(true, {});
       let currentSection = null;
       let textBuffer = "";
       let inTextContent = false;
       const contentTags = new Set(["P", "TEXT", "EXTRACT", "SUBJECT", "FP"]);
+
+      // ✅ New: Confirm stream lifecycle
+      parser.on("end", () => {
+        console.log(`✅ SAX parser finished for Title ${titleNumber}`);
+      });
+
+      parser.on("error", (err) => {
+        console.error(`❌ SAX parser error for Title ${titleNumber}:`, err);
+      });
 
       parser.on("opentag", (node) => {
         const type = node.attributes.TYPE;
@@ -445,11 +461,12 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
         }
       });
 
+      // ✅ Updated: No longer gated by inTextContent
       parser.on("text", (text) => {
-  if (text.trim() && currentSection) {
-    textBuffer += text;
-  }
-});
+        if (text.trim() && currentSection) {
+          textBuffer += text;
+        }
+      });
 
       parser.on("closetag", (name) => {
         if (contentTags.has(name) && currentSection) {
