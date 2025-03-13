@@ -271,27 +271,28 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
 });
 
 
-// ===================== 🐿️ Cyber Squirrel Search Engine — Final Clean + Normalized Slug Fix =====================
+// ===================== 🐿️ Cyber Squirrel Search Engine — Final Clean Unified Version =====================
 app.get("/api/search/cyber-squirrel", async (req, res) => {
-  // STEP 1: Extract query and filters
+  // STEP 1: Extract query and filters from URL
   const query = (req.query.q || "").toLowerCase().trim();
   const titleFilter = req.query.title ? parseInt(req.query.title) : null;
 
-  // ✅ NEW: normalize agency slug input first, identical to word count
+  // ✅ SAFELY normalize agency slug input, whether string or array
   const rawAgencyInput = req.query["agency_slugs[]"] || req.query.agency_slugs || req.query.agency;
-  const normalizeSlug = (str) => (str || "").toLowerCase().replace(/\s+/g, "-");
-  const agencyFilter = normalizeSlug(rawAgencyInput);
+  const rawSlug = Array.isArray(rawAgencyInput) ? rawAgencyInput[0] : rawAgencyInput;
+  const normalizeSlug = (val) => (typeof val === "string" ? val.toLowerCase().trim().replace(/\s+/g, "-") : "");
+  const agencyFilter = normalizeSlug(rawSlug);
 
   const matchedResults = [];
   console.log(`🛫 Cyber Squirrel Search → Query: "${query}" | Title: ${titleFilter || "None"} | Agency: ${agencyFilter || "None"}`);
 
-  // STEP 2: No input at all → return empty
+  // STEP 2: If nothing entered at all, exit immediately
   if (!query && !titleFilter && !agencyFilter) {
     console.log("⚠️ Empty query and no filters — exiting.");
     return res.json({ results: [] });
   }
 
-  // STEP 3: TITLE filter only (return title root only)
+  // STEP 3: TITLE filter only → return title root metadata only
   if (!query && titleFilter) {
     const titles = metadataCache.get("titlesMetadata") || [];
     const titleMeta = titles.find(t => parseInt(t.number) === titleFilter);
@@ -307,10 +308,12 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
     return res.json({ results: matchedResults });
   }
 
-  // STEP 4: AGENCY filter only (return CFR reference links from metadata)
+  // STEP 4: AGENCY filter only (no keyword) → return CFR references
   if (!query && agencyFilter) {
     const agencies = metadataCache.get("agenciesMetadata") || [];
-    const agency = agencies.find(a => a.slug === agencyFilter || normalizeSlug(a.name) === agencyFilter);
+    const agency = agencies.find(
+      a => a.slug === agencyFilter || normalizeSlug(a.name) === agencyFilter
+    );
 
     console.log("🔍 DEBUG AGENCY OBJECT →", JSON.stringify(agency, null, 2));
     if (!agency) {
@@ -342,15 +345,17 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
     return res.json({ results: matchedResults });
   }
 
-  // STEP 5: SCOPED KEYWORD SEARCH (with optional title + agency filter)
+  // STEP 5: KEYWORD SEARCH mode (with optional title/agency filters)
   const titles = metadataCache.get("titlesMetadata") || [];
   const agencies = metadataCache.get("agenciesMetadata") || [];
   const scopedAgencyRefs = [];
 
-  // ✅ MATCH AGENCY OBJECT USING NORMALIZED STRATEGY
+  // Match agency object exactly like word count endpoint does
   let agency = null;
   if (agencyFilter) {
-    agency = agencies.find(a => a.slug === agencyFilter || normalizeSlug(a.name) === agencyFilter);
+    agency = agencies.find(
+      a => a.slug === agencyFilter || normalizeSlug(a.name) === agencyFilter
+    );
     if (!agency) {
       console.warn("❌ Agency not found — skipping agency scope");
     } else if (agency.cfr_references?.length > 0) {
@@ -363,7 +368,6 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
   try {
     for (const titleMeta of titles) {
       const titleNumber = parseInt(titleMeta.number);
-
       if (titleFilter && titleNumber !== titleFilter) continue;
       if (agencyFilter && !scopedAgencyRefs.some(ref => ref.title === titleNumber)) {
         console.log(`🚫 Skipping Title ${titleNumber} — not in agency scope`);
@@ -381,7 +385,6 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
       console.log(`📥 Structure loaded for Title ${titleNumber}`);
 
       const sectionSet = new Set();
-
       const collectSections = (node) => {
         if (node.type === "section") sectionSet.add(node.identifier);
         if (node.children) node.children.forEach(collectSections);
