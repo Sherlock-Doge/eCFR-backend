@@ -386,7 +386,7 @@ app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
 
 
 
-// ===================== 🐿️ Flying Cyber Squirrel Search Engine (Final Polished Form - Stream Fix Applied) =====================
+// ===================== 🐿️ Flying Cyber Squirrel Search Engine (Final Version — Agency Logic Unified) =====================
 app.get("/api/search/cyber-squirrel", async (req, res) => {
   const query = (req.query.q || "").toLowerCase().trim();
   const titleFilter = req.query.title ? parseInt(req.query.title) : null;
@@ -405,7 +405,6 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
       const titleNumber = parseInt(titleMeta.number);
       if (titleFilter && titleNumber !== titleFilter) continue;
 
-      // ✅ Use fallback for issue date (latest_issue_date OR up_to_date_as_of)
       const issueDate = titleMeta.latest_issue_date || titleMeta.up_to_date_as_of;
       if (!issueDate) {
         console.warn(`⚠️ Skipping Title ${titleNumber} — No valid issue date available`);
@@ -425,18 +424,8 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
 
       const parser = sax.createStream(true, {});
       let currentSection = null;
-      let textBuffer = "";
-      let inTextContent = false;
-      const contentTags = new Set(["P", "TEXT", "EXTRACT", "SUBJECT", "FP"]);
-
-      // ✅ New: Confirm stream lifecycle
-      parser.on("end", () => {
-        console.log(`✅ SAX parser finished for Title ${titleNumber}`);
-      });
-
-      parser.on("error", (err) => {
-        console.error(`❌ SAX parser error for Title ${titleNumber}:`, err);
-      });
+      let collectingText = false;
+      let sectionText = "";
 
       parser.on("opentag", (node) => {
         const type = node.attributes.TYPE;
@@ -444,60 +433,58 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
         const heading = node.attributes.HEADING;
 
         if (type === "section") {
-          console.log(`➡️ SECTION: ${identifier} (${heading || "No Heading"})`);
           currentSection = {
             section: identifier,
             heading: heading || "",
-            match: false,
             content: "",
+            match: false,
             title: titleNumber,
             url: `https://www.ecfr.gov/current/title-${titleNumber}/section-${identifier}`
           };
-        }
-
-        if (contentTags.has(node.name)) {
-          inTextContent = true;
-          textBuffer = "";
+          sectionText = "";
+          collectingText = true;
+          console.log(`➡️ SECTION: ${identifier} (${heading || "No Heading"})`);
         }
       });
 
-      // ✅ Updated: No longer gated by inTextContent
       parser.on("text", (text) => {
-        if (text.trim() && currentSection) {
-          textBuffer += text;
+        if (collectingText && currentSection) {
+          sectionText += text;
         }
       });
 
       parser.on("closetag", (name) => {
-        if (contentTags.has(name) && currentSection) {
-          inTextContent = false;
-
-          const normalizedText = textBuffer.toLowerCase();
+        if (name === "SECTION" && currentSection) {
+          const normalized = sectionText.toLowerCase();
           const matchFound =
-            normalizedText.includes(query) ||
+            normalized.includes(query) ||
             currentSection.heading.toLowerCase().includes(query);
 
           if (matchFound) {
             currentSection.match = true;
-            currentSection.content += textBuffer.trim() + " ";
-          }
-
-          textBuffer = "";
-        }
-
-        if (name === "SECTION" && currentSection) {
-          if (currentSection.match) {
+            currentSection.content = sectionText.trim();
             matchedResults.push({
               section: currentSection.section,
               heading: currentSection.heading,
               title: `Title ${currentSection.title}`,
-              excerpt: currentSection.content.trim().substring(0, 500) + "...",
+              excerpt: currentSection.content.substring(0, 500) + "...",
               link: currentSection.url
             });
             console.log(`✅ MATCH FOUND in Section ${currentSection.section} (Title ${titleNumber})`);
           }
+
           currentSection = null;
+          collectingText = false;
+          sectionText = "";
         }
+      });
+
+      parser.on("end", () => {
+        console.log(`✅ SAX parser finished for Title ${titleNumber}`);
+      });
+
+      parser.on("error", (err) => {
+        console.error(`❌ SAX parser error for Title ${titleNumber}:`, err);
       });
 
       await new Promise((resolve, reject) => {
