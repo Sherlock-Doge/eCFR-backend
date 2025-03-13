@@ -401,9 +401,11 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
   console.log(`🛫 Cyber Squirrel Internal Search → Query: "${query}" | Title Filter: ${titleFilter || "None"} | Agency Filter: ${agencyFilter || "None"}`);
   const matchedResults = [];
 
-  // ✅ Prepend top result if title filter is set
+  const titles = metadataCache.get("titlesMetadata") || [];
+  const scopedSectionMap = new Map(); // titleNumber -> Set(sectionIdentifiers)
+
+  // ✅ Title-only result preface
   if (!query && titleFilter) {
-    const titles = metadataCache.get("titlesMetadata") || [];
     const titleMeta = titles.find(t => parseInt(t.number) === titleFilter);
     if (titleMeta) {
       matchedResults.push({
@@ -415,84 +417,81 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
     }
   }
 
-  // ✅ Prepend top result if agency filter is set
-  let scopedAgencyRefs = [];
-  if (!query && agencyFilter) {
+  // ✅ Agency-only result preface AND strict scope map
+  if (agencyFilter) {
     const agencies = metadataCache.get("agenciesMetadata") || [];
     const agency = agencies.find(a => a.slug === agencyFilter || a.name.toLowerCase().replace(/\s+/g, "-") === agencyFilter);
-    if (agency && agency.cfr_references && agency.cfr_references.length > 0) {
+
+    if (agency?.cfr_references?.length) {
       for (const ref of agency.cfr_references) {
-        const title = ref.title;
-        const chapter = ref.chapter || null;
-        const subtitle = ref.subtitle || null;
-        const url = subtitle
-          ? `https://www.ecfr.gov/current/title-${title}/subtitle-${subtitle}`
-          : chapter
-            ? `https://www.ecfr.gov/current/title-${title}/chapter-${chapter}`
-            : `https://www.ecfr.gov/current/title-${title}`;
+        const { title, chapter, subtitle } = ref;
+        const titleMeta = titles.find(t => parseInt(t.number) === title);
+        const issueDate = titleMeta?.latest_issue_date || titleMeta?.up_to_date_as_of;
+        if (!issueDate) continue;
 
-        matchedResults.push({
-          section: agency.name,
-          heading: `CFR Reference: Title ${title}${subtitle ? ` Subtitle ${subtitle}` : chapter ? ` Chapter ${chapter}` : ""}`,
-          excerpt: "Root of selected agency CFR reference.",
-          link: url
-        });
+        const structureUrl = `${VERSIONER}/structure/${issueDate}/title-${title}.json`;
+        try {
+          const structure = (await axios.get(structureUrl)).data;
 
-        scopedAgencyRefs.push({ title, chapter, subtitle });
+          const findEntryNode = (node) => {
+            if (!node || typeof node !== "object") return null;
+            if (subtitle && node.type === "subtitle" && node.identifier === subtitle) return node;
+            if (chapter && !subtitle && node.type === "chapter" && node.identifier === chapter) return node;
+            if (node.children) {
+              for (const child of node.children) {
+                const found = findEntryNode(child);
+                if (found) return found;
+              }
+            }
+            return null;
+          };
+
+          const entryNode = findEntryNode(structure);
+          const sectionSet = new Set();
+          const collectSections = (node) => {
+            if (node.type === "section") sectionSet.add(node.identifier);
+            if (node.children) node.children.forEach(collectSections);
+          };
+
+          if (entryNode) {
+            collectSections(entryNode);
+
+            // ✅ Save scoped sectionSet
+            if (!scopedSectionMap.has(title)) scopedSectionMap.set(title, new Set());
+            sectionSet.forEach((s) => scopedSectionMap.get(title).add(s));
+
+            // ✅ Append root URL entry
+            const url = subtitle
+              ? `https://www.ecfr.gov/current/title-${title}/subtitle-${subtitle}`
+              : chapter
+              ? `https://www.ecfr.gov/current/title-${title}/chapter-${chapter}`
+              : `https://www.ecfr.gov/current/title-${title}`;
+            matchedResults.push({
+              section: agency.name,
+              heading: `CFR Reference: Title ${title}${subtitle ? ` Subtitle ${subtitle}` : chapter ? ` Chapter ${chapter}` : ""}`,
+              excerpt: "Root of selected agency CFR reference.",
+              link: url
+            });
+          }
+        } catch (err) {
+          console.warn(`⚠️ Failed to resolve structure for Title ${title} in agency scope.`);
+        }
       }
     }
   }
 
+  // ✅ Now stream & match content, scoped if needed
   try {
-    const titles = metadataCache.get("titlesMetadata") || [];
-
     for (const titleMeta of titles) {
       const titleNumber = parseInt(titleMeta.number);
       if (titleFilter && titleNumber !== titleFilter) continue;
 
+      // Skip titles with no scoped sections if agency filter is active
+      if (agencyFilter && !scopedSectionMap.has(titleNumber)) continue;
+      const scopedSectionSet = agencyFilter ? scopedSectionMap.get(titleNumber) : null;
+
       const issueDate = titleMeta.latest_issue_date || titleMeta.up_to_date_as_of;
-      if (!issueDate) {
-        console.warn(`⚠️ Skipping Title ${titleNumber} — No valid issue date available`);
-        continue;
-      }
-
-      const structureUrl = `${VERSIONER}/structure/${issueDate}/title-${titleNumber}.json`;
-      const structure = (await axios.get(structureUrl)).data;
-
-      // ✅ Agency Scope Mode — only collect sections under CFR tree
-      const sectionSet = new Set();
-      const collectSections = (node) => {
-        if (node.type === "section") sectionSet.add(node.identifier);
-        if (node.children) node.children.forEach(collectSections);
-      };
-
-      const findNode = (node, matchType, matchId) => {
-        if (!node || typeof node !== "object") return null;
-        if (node.type === matchType && node.identifier === matchId) return node;
-        if (node.children) {
-          for (const child of node.children) {
-            const result = findNode(child, matchType, matchId);
-            if (result) return result;
-          }
-        }
-        return null;
-      };
-
-      if (agencyFilter && scopedAgencyRefs.length > 0) {
-        for (const ref of scopedAgencyRefs) {
-          if (ref.title !== titleNumber) continue;
-          const entryNode = ref.subtitle
-            ? findNode(structure, "subtitle", ref.subtitle)
-            : ref.chapter
-              ? findNode(structure, "chapter", ref.chapter)
-              : structure;
-          if (entryNode) collectSections(entryNode);
-        }
-      } else {
-        collectSections(structure); // full match
-      }
-
-      if (!sectionSet.size) continue;
+      if (!issueDate) continue;
 
       const xmlUrl = `${VERSIONER}/full/${issueDate}/title-${titleNumber}.xml`;
       const response = await axios({
@@ -504,17 +503,20 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
         timeout: 60000
       });
 
+      const sax = require("sax");
       const parser = sax.createStream(true);
       let currentSection = null;
-      let captureText = false;
       let currentText = "";
+      let captureText = false;
       const stack = [];
 
       parser.on("opentag", (node) => {
         const { name, attributes } = node;
         if (name.startsWith("DIV") && attributes.TYPE && attributes.N) {
           stack.push({ type: attributes.TYPE.toLowerCase(), number: attributes.N });
-          if (attributes.TYPE.toLowerCase() === "section" && sectionSet.has(attributes.N)) {
+
+          if (attributes.TYPE.toLowerCase() === "section") {
+            if (scopedSectionSet && !scopedSectionSet.has(attributes.N)) return;
             currentSection = {
               section: attributes.N,
               heading: attributes.HEADING || "",
@@ -526,6 +528,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
             currentText = "";
           }
         }
+
         if (currentSection && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(name)) {
           captureText = true;
         }
@@ -538,18 +541,19 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
       });
 
       parser.on("closetag", (tag) => {
-        if (captureText && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(tag)) captureText = false;
+        if (captureText && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(tag)) {
+          captureText = false;
+        }
 
         if (tag.startsWith("DIV") && stack.length > 0) {
           const popped = stack.pop();
           if (popped.type === "section" && currentSection && popped.number === currentSection.section) {
             const normalizedText = currentText.toLowerCase();
             const matchFound =
-              normalizedText.includes(query) ||
-              currentSection.heading.toLowerCase().includes(query);
+              query &&
+              (normalizedText.includes(query) || currentSection.heading.toLowerCase().includes(query));
 
             if (matchFound) {
-              currentSection.match = true;
               currentSection.content = currentText.trim();
               matchedResults.push({
                 section: currentSection.section,
@@ -568,11 +572,11 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
       });
 
       parser.on("end", () => {
-        console.log(`✅ SAX parser finished for Title ${titleNumber}`);
+        console.log(`✅ Finished parsing Title ${titleNumber}`);
       });
 
       parser.on("error", (err) => {
-        console.error(`❌ SAX parser error for Title ${titleNumber}:`, err);
+        console.error(`❌ SAX parser error in Title ${titleNumber}:`, err);
       });
 
       await new Promise((resolve, reject) => {
@@ -587,6 +591,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
     res.status(500).json({ error: "Search failed" });
   }
 });
+
 
 
 // ===================== Search Count =====================
