@@ -386,7 +386,7 @@ app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
 
 
 
-// ===================== 🐿️ Flying Cyber Squirrel Search Engine (Final Version — Agency Logic Unified) =====================
+// ===================== 🐿️ Cyber Squirrel Search Engine — Final Rabbit Shucker Model =====================
 app.get("/api/search/cyber-squirrel", async (req, res) => {
   const query = (req.query.q || "").toLowerCase().trim();
   const titleFilter = req.query.title ? parseInt(req.query.title) : null;
@@ -411,71 +411,93 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
         continue;
       }
 
-      const streamUrl = `${VERSIONER}/full/${issueDate}/title-${titleNumber}.xml`;
-      console.log(`📡 Streaming XML from: ${streamUrl}`);
+      const structureUrl = `${VERSIONER}/structure/${issueDate}/title-${titleNumber}.json`;
+      const structure = (await axios.get(structureUrl)).data;
 
-      const response = await axios.get(streamUrl, {
+      const sectionSet = new Set();
+      const collectSections = (node) => {
+        if (node.type === "section") sectionSet.add(node.identifier);
+        if (node.children) node.children.forEach(collectSections);
+      };
+      collectSections(structure);
+
+      if (!sectionSet.size) {
+        console.warn(`⚠️ No sections found for Title ${titleNumber}`);
+        continue;
+      }
+
+      const xmlUrl = `${VERSIONER}/full/${issueDate}/title-${titleNumber}.xml`;
+      const response = await axios({
+        method: "GET",
+        url: xmlUrl,
         responseType: "stream",
         decompress: true,
-        headers: {
-          "Accept-Encoding": "gzip, deflate, br"
-        }
+        headers: { "Accept-Encoding": "gzip, deflate, br" },
+        timeout: 60000
       });
 
-      const parser = sax.createStream(true, {});
+      const parser = sax.createStream(true);
       let currentSection = null;
-      let collectingText = false;
-      let sectionText = "";
+      let captureText = false;
+      let currentText = "";
+      const stack = [];
 
       parser.on("opentag", (node) => {
-        const type = node.attributes.TYPE;
-        const identifier = node.attributes.IDENTIFIER;
-        const heading = node.attributes.HEADING;
-
-        if (type === "section") {
-          currentSection = {
-            section: identifier,
-            heading: heading || "",
-            content: "",
-            match: false,
-            title: titleNumber,
-            url: `https://www.ecfr.gov/current/title-${titleNumber}/section-${identifier}`
-          };
-          sectionText = "";
-          collectingText = true;
-          console.log(`➡️ SECTION: ${identifier} (${heading || "No Heading"})`);
+        const { name, attributes } = node;
+        if (name.startsWith("DIV") && attributes.TYPE && attributes.N) {
+          stack.push({ type: attributes.TYPE.toLowerCase(), number: attributes.N });
+          if (attributes.TYPE.toLowerCase() === "section" && sectionSet.has(attributes.N)) {
+            currentSection = {
+              section: attributes.N,
+              heading: attributes.HEADING || "",
+              title: titleNumber,
+              content: "",
+              url: `https://www.ecfr.gov/current/title-${titleNumber}/section-${attributes.N}`,
+              match: false
+            };
+            currentText = "";
+          }
+        }
+        if (currentSection && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(name)) {
+          captureText = true;
         }
       });
 
       parser.on("text", (text) => {
-        if (collectingText && currentSection) {
-          sectionText += text;
+        if (captureText && currentSection) {
+          currentText += text.trim() + " ";
         }
       });
 
-      parser.on("closetag", (name) => {
-        if (name === "SECTION" && currentSection) {
-          const normalized = sectionText.toLowerCase();
-          const matchFound =
-            normalized.includes(query) ||
-            currentSection.heading.toLowerCase().includes(query);
+      parser.on("closetag", (tag) => {
+        if (captureText && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(tag)) {
+          captureText = false;
+        }
 
-          if (matchFound) {
-            currentSection.match = true;
-            currentSection.content = sectionText.trim();
-            matchedResults.push({
-              section: currentSection.section,
-              heading: currentSection.heading,
-              title: `Title ${currentSection.title}`,
-              excerpt: currentSection.content.substring(0, 500) + "...",
-              link: currentSection.url
-            });
-            console.log(`✅ MATCH FOUND in Section ${currentSection.section} (Title ${titleNumber})`);
+        if (tag.startsWith("DIV") && stack.length > 0) {
+          const popped = stack.pop();
+          if (popped.type === "section" && currentSection && popped.number === currentSection.section) {
+            const normalizedText = currentText.toLowerCase();
+            const matchFound =
+              normalizedText.includes(query) ||
+              currentSection.heading.toLowerCase().includes(query);
+
+            if (matchFound) {
+              currentSection.match = true;
+              currentSection.content = currentText.trim();
+              matchedResults.push({
+                section: currentSection.section,
+                heading: currentSection.heading,
+                title: `Title ${currentSection.title}`,
+                excerpt: currentSection.content.substring(0, 500) + "...",
+                link: currentSection.url
+              });
+              console.log(`✅ MATCH FOUND in Section ${currentSection.section} (Title ${titleNumber})`);
+            }
+
+            currentSection = null;
+            currentText = "";
           }
-
-          currentSection = null;
-          collectingText = false;
-          sectionText = "";
         }
       });
 
@@ -495,7 +517,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
     console.log(`🎯 Cyber Squirrel Search Completed → ${matchedResults.length} matches found.`);
     res.json({ results: matchedResults });
   } catch (err) {
-    console.error("💥 Cyber Squirrel Error:", err);
+    console.error("💥 Cyber Squirrel Search Error:", err);
     res.status(500).json({ error: "Search failed" });
   }
 });
