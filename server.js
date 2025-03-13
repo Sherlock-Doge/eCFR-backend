@@ -420,29 +420,37 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
   }
 
   // 🔍 STEP 4: AGENCY FILTER ONLY (no query — return CFR reference links)
-  if (!query && agencyFilter) {
-    const agencies = metadataCache.get("agenciesMetadata") || [];
-    const agency = agencies.find(a => a.slug === agencyFilter || a.name.toLowerCase().replace(/\s+/g, "-") === agencyFilter);
-    if (agency?.cfr_references?.length > 0) {
-      console.log(`📦 Agency-only mode — returning ${agency.cfr_references.length} CFR references for: ${agency.name}`);
-      agency.cfr_references.forEach(ref => {
-        const url = ref.subtitle
-          ? `https://www.ecfr.gov/current/title-${ref.title}/subtitle-${ref.subtitle}`
-          : ref.chapter
-            ? `https://www.ecfr.gov/current/title-${ref.title}/chapter-${ref.chapter}`
-            : `https://www.ecfr.gov/current/title-${ref.title}`;
-        matchedResults.push({
-          section: agency.name,
-          heading: `CFR Reference: Title ${ref.title}${ref.subtitle ? ` Subtitle ${ref.subtitle}` : ref.chapter ? ` Chapter ${ref.chapter}` : ""}`,
-          excerpt: "Root of selected agency CFR reference.",
-          link: url
-        });
+ if (!query && agencyFilter) {
+  const agencies = metadataCache.get("agenciesMetadata") || [];
+  const agency = agencies.find(a => a.slug === agencyFilter || a.name.toLowerCase().replace(/\s+/g, "-") === agencyFilter);
+
+  // ⬇️ INSERT THIS DEBUG LOG RIGHT HERE:
+  console.log("DEBUG AGENCY OBJECT →", JSON.stringify(agency, null, 2));
+
+  if (agency?.cfr_references?.length > 0) {
+    console.log(`📦 Agency-only path: ${agency.name} with ${agency.cfr_references.length} CFR references`);
+    agency.cfr_references.forEach(ref => {
+      const title = ref.title;
+      const chapter = ref.chapter || null;
+      const subtitle = ref.subtitle || null;
+      const url = subtitle
+        ? `https://www.ecfr.gov/current/title-${title}/subtitle-${subtitle}`
+        : chapter
+          ? `https://www.ecfr.gov/current/title-${title}/chapter-${chapter}`
+          : `https://www.ecfr.gov/current/title-${title}`;
+      matchedResults.push({
+        section: agency.name,
+        heading: `CFR Reference: Title ${title}${subtitle ? ` Subtitle ${subtitle}` : chapter ? ` Chapter ${chapter}` : ""}`,
+        excerpt: "Root of selected agency CFR reference.",
+        link: url
       });
-    } else {
-      console.warn("⚠️ Agency found but has NO CFR references listed — nothing to show.");
-    }
-    return res.json({ results: matchedResults });
+    });
+  } else {
+    console.warn("⚠️ Agency metadata found, but no CFR references listed.");
   }
+  return res.json({ results: matchedResults });
+}
+
 
   // 🔍 STEP 5: SCOPED QUERY MODE — Handle actual keyword search with title or agency scoping
   const titles = metadataCache.get("titlesMetadata") || [];
