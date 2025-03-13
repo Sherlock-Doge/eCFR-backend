@@ -390,15 +390,22 @@ app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
 app.get("/api/search/cyber-squirrel", async (req, res) => {
   const query = (req.query.q || "").toLowerCase().trim();
   const titleFilter = req.query.title ? parseInt(req.query.title) : null;
-  const filtersOnly = !query && (titleFilter || req.query["agency_slugs[]"] || req.query.last_modified_on_or_after || req.query.last_modified_on_or_before);
-if (!query && !filtersOnly) {
-  console.log("⚠️ Empty query and no filters — skipping search.");
-  return res.json({ results: [] });
-}
 
+  // ✅ NEW: Robust agency filter detection
+  const agencyFilter = req.query["agency_slugs[]"] || req.query.agency_slugs || req.query.agency;
 
-  console.log(`🛫 Cyber Squirrel Internal Search → Query: "${query}" | Title Filter: ${titleFilter || "None"}`);
+  // ✅ NEW: Proper filtersOnly logic
+  const filtersOnly = !query && (titleFilter || agencyFilter || req.query.last_modified_on_or_after || req.query.last_modified_on_or_before);
+
+  // ✅ Abort only if nothing at all is selected
+  if (!query && !filtersOnly) {
+    console.log("⚠️ Empty query and no filters — skipping search.");
+    return res.json({ results: [] });
+  }
+
+  console.log(`🛫 Cyber Squirrel Internal Search → Query: "${query}" | Title Filter: ${titleFilter || "None"} | Agency Filter: ${agencyFilter ? "Present" : "None"}`);
   const matchedResults = [];
+
 
   try {
     const titles = metadataCache.get("titlesMetadata") || [];
