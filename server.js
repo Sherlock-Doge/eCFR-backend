@@ -386,7 +386,7 @@ app.get('/api/wordcount/agency-fast/:slug', async (req, res) => {
 
 
 
-// ===================== 🐿️ Cyber Squirrel Search Engine — Final Rabbit Shucker Model (Root Result Enhanced) =====================
+// ===================== 🐿️ Cyber Squirrel Search Engine — Final Scoped Agency Tree Match Version =====================
 app.get("/api/search/cyber-squirrel", async (req, res) => {
   const query = (req.query.q || "").toLowerCase().trim();
   const titleFilter = req.query.title ? parseInt(req.query.title) : null;
@@ -416,6 +416,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
   }
 
   // ✅ Prepend top result if agency filter is set
+  let scopedAgencyRefs = [];
   if (!query && agencyFilter) {
     const agencies = metadataCache.get("agenciesMetadata") || [];
     const agency = agencies.find(a => a.slug === agencyFilter || a.name.toLowerCase().replace(/\s+/g, "-") === agencyFilter);
@@ -436,6 +437,8 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
           excerpt: "Root of selected agency CFR reference.",
           link: url
         });
+
+        scopedAgencyRefs.push({ title, chapter, subtitle });
       }
     }
   }
@@ -456,17 +459,40 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
       const structureUrl = `${VERSIONER}/structure/${issueDate}/title-${titleNumber}.json`;
       const structure = (await axios.get(structureUrl)).data;
 
+      // ✅ Agency Scope Mode — only collect sections under CFR tree
       const sectionSet = new Set();
       const collectSections = (node) => {
         if (node.type === "section") sectionSet.add(node.identifier);
         if (node.children) node.children.forEach(collectSections);
       };
-      collectSections(structure);
 
-      if (!sectionSet.size) {
-        console.warn(`⚠️ No sections found for Title ${titleNumber}`);
-        continue;
+      const findNode = (node, matchType, matchId) => {
+        if (!node || typeof node !== "object") return null;
+        if (node.type === matchType && node.identifier === matchId) return node;
+        if (node.children) {
+          for (const child of node.children) {
+            const result = findNode(child, matchType, matchId);
+            if (result) return result;
+          }
+        }
+        return null;
+      };
+
+      if (agencyFilter && scopedAgencyRefs.length > 0) {
+        for (const ref of scopedAgencyRefs) {
+          if (ref.title !== titleNumber) continue;
+          const entryNode = ref.subtitle
+            ? findNode(structure, "subtitle", ref.subtitle)
+            : ref.chapter
+              ? findNode(structure, "chapter", ref.chapter)
+              : structure;
+          if (entryNode) collectSections(entryNode);
+        }
+      } else {
+        collectSections(structure); // full match
       }
+
+      if (!sectionSet.size) continue;
 
       const xmlUrl = `${VERSIONER}/full/${issueDate}/title-${titleNumber}.xml`;
       const response = await axios({
@@ -512,9 +538,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
       });
 
       parser.on("closetag", (tag) => {
-        if (captureText && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(tag)) {
-          captureText = false;
-        }
+        if (captureText && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(tag)) captureText = false;
 
         if (tag.startsWith("DIV") && stack.length > 0) {
           const popped = stack.pop();
@@ -563,7 +587,6 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
     res.status(500).json({ error: "Search failed" });
   }
 });
-
 
 
 // ===================== Search Count =====================
