@@ -105,7 +105,7 @@ async function streamAndCountWords(url) {
   }
 }
 
-// ===================== Word Count by Agency (FINAL CLEAN MERGED STRATEGY - NO GUESSWORK) =====================
+// ===================== Word Count by Agency =====================
 
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
   const sax = require("sax");
@@ -353,9 +353,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
     }
   }
 
-  //RECENT EDIT BELOW:
-
-  
+   
   try {
   for (const titleMeta of titles) {
     const titleNumber = parseInt(titleMeta.number);
@@ -404,9 +402,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
       return null;
     };
 
-    // RECENT EDIT ABOVE
-
-
+   
       if (agencyFilter && scopedAgencyRefs.length > 0) {
         const matchingRefs = scopedAgencyRefs.filter(ref => ref.title === titleNumber);
         matchingRefs.forEach(ref => {
@@ -494,8 +490,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
         }
       });
 
-    //RECENT EDIT HERE:
-    
+        
        parser.on("end", () => {
         const titleResults = matchedResults.filter(r => r.title === `Title ${titleNumber}`);
         console.log(`✅ Completed Title ${titleNumber} → ${titleResults.length} matches added`);
@@ -521,7 +516,6 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
     res.status(500).json({ error: "Search engine failure." });
   }
 });
-
 
 
 // ===================== Search Count =====================
@@ -614,113 +608,4 @@ app.get("/api/search/suggestions", async (req, res) => {
 // ===================== Start Server =====================
 app.listen(PORT, () => {
   console.log(`🚀 eCFR Analyzer server running on port ${PORT}`);
-});
-
-
-
-// ===================== TEST: Full Agency Chapter Structure Walker =====================
-app.get("/api/test-agency-chapter-structure/:title/:chapter", async (req, res) => {
-  const titleNumber = req.params.title;
-  const chapterId = req.params.chapter;
-  const results = [];
-  const visitedNodes = new Set();
-  const axios = require("axios");
-
-  try {
-    const titles = metadataCache.get("titlesMetadata") || [];
-    const meta = titles.find(t => t.number.toString() === titleNumber.toString());
-    const issueDate = meta?.latest_issue_date;
-    if (!issueDate) return res.status(400).json({ error: "Missing issue date for title" });
-
-    const structureUrl = `${VERSIONER}/structure/${issueDate}/title-${titleNumber}.json`;
-    const structure = (await axios.get(structureUrl)).data;
-
-    // Recursive walk function
-    function walk(node, path = []) {
-      if (!node || visitedNodes.has(node.identifier)) return;
-      visitedNodes.add(node.identifier);
-
-      const updatedPath = [...path];
-      if (node.type === "chapter") updatedPath.push(`Chapter ${node.identifier}`);
-      else if (node.type === "subchapter") updatedPath.push(`Subchapter ${node.identifier}`);
-      else if (node.type === "part") updatedPath.push(`Part ${node.identifier}`);
-      else if (node.type === "subpart") updatedPath.push(`Subpart ${node.identifier}`);
-      else if (node.type === "section") {
-        updatedPath.push(`Section ${node.identifier}`);
-        results.push({ path: updatedPath.join(" → "), type: "section" });
-        return;
-      }
-
-      if (["chapter", "subchapter", "part", "subpart"].includes(node.type)) {
-        results.push({ path: updatedPath.join(" → "), type: node.type });
-      }
-
-      if (node.children && Array.isArray(node.children)) {
-        node.children.forEach(child => walk(child, updatedPath));
-      }
-    }
-
-    // Start from matching chapter root
-    const chapterNode = structure.children?.find(child =>
-      child.type === "chapter" && child.identifier === chapterId
-    );
-    if (!chapterNode) return res.status(404).json({ error: `Chapter ${chapterId} not found in Title ${titleNumber}` });
-
-    walk(chapterNode);
-
-    return res.json({
-      title: `Title ${titleNumber}`,
-      chapter: chapterId,
-      nodeCount: results.length,
-      structure: results
-    });
-
-  } catch (e) {
-    console.error("🚨 Chapter Structure Test Error:", e.message);
-    return res.status(500).json({ error: "Structure parsing error" });
-  }
-});
-
-
-// ===================== DEBUG STRUCTURE TREE: /api/debug-structure/:titleNumber =====================
-app.get("/api/debug-structure/:titleNumber", async (req, res) => {
-  const titleNumber = req.params.titleNumber;
-  const titles = metadataCache.get("titlesMetadata") || [];
-  const meta = titles.find(t => t.number.toString() === titleNumber.toString());
-  if (!meta || !meta.latest_issue_date) {
-    return res.status(400).json({ error: "Invalid or missing title metadata" });
-  }
-
-  const structureUrl = `${VERSIONER}/structure/${meta.latest_issue_date}/title-${titleNumber}.json`;
-
-  try {
-    const response = await axios.get(structureUrl);
-    const root = response.data;
-
-    const nodes = [];
-
-    function traverse(node, path = []) {
-      const currentPath = [...path, `${node.type}(${node.identifier || "?"})`];
-      nodes.push({
-        type: node.type,
-        identifier: node.identifier || null,
-        path: currentPath.join(" → ")
-      });
-
-      if (node.children && Array.isArray(node.children)) {
-        node.children.forEach(child => traverse(child, currentPath));
-      }
-    }
-
-    traverse(root);
-
-    res.json({
-      title: `Title ${titleNumber}`,
-      totalNodes: nodes.length,
-      nodes
-    });
-  } catch (err) {
-    console.error("🚨 DEBUG STRUCTURE error:", err.message);
-    res.status(500).json({ error: "Failed to fetch or parse structure JSON" });
-  }
 });
