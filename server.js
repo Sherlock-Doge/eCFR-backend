@@ -22,6 +22,7 @@ app.use((req, res, next) => {
   next();
 });
 
+
 // ========== Titles ==========
 
 app.get("/api/titles", async (req, res) => {
@@ -44,8 +45,8 @@ app.get("/api/titles", async (req, res) => {
   }
 });
 
-// ========== Agencies ==========
 
+// ========== Agencies ==========
 app.get("/api/agencies", async (req, res) => {
   try {
     const response = await axios.get(`${ADMIN}/agencies.json`);
@@ -57,10 +58,8 @@ app.get("/api/agencies", async (req, res) => {
   }
 });
 
-//recent edit below:
 
 // ========== Agency ↔ Title Mapping ==========
-
 app.get("/api/agency-title-map", async (req, res) => {
   try {
     const agencies = metadataCache.get("agenciesMetadata") || [];
@@ -82,24 +81,7 @@ app.get("/api/agency-title-map", async (req, res) => {
 });
 
 
-//recent edit above
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // ========== Word Count by Title ==========
-
 app.get("/api/wordcount/:titleNumber", async (req, res) => {
   const titleNumber = req.params.titleNumber;
   const cacheKey = `wordCount-${titleNumber}`;
@@ -144,8 +126,8 @@ async function streamAndCountWords(url) {
   }
 }
 
-// ===================== Word Count by Agency =====================
 
+// ===================== Word Count by Agency =====================
 app.get("/api/wordcount/agency/:slug", async (req, res) => {
   const sax = require("sax");
 
@@ -310,7 +292,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
 });
 
 
-// ===================== 🐿️ Cyber Squirrel Search Engine — Final Production Version with Scoring & Sorting =====================
+// 🐿️ Cyber Squirrel Search Engine 
 app.get("/api/search/cyber-squirrel", async (req, res) => {
   const query = (req.query.q || "").toLowerCase().trim();
   const titleFilter = req.query.title ? parseInt(req.query.title) : null;
@@ -643,6 +625,7 @@ app.get("/api/search/suggestions", async (req, res) => {
     console.error("🚨 Metadata preload failed:", e.message);
   }
 })();
+
 
 // ===================== Start Server =====================
 app.listen(PORT, () => {
