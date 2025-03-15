@@ -2,8 +2,6 @@ const express = require("express");
 const axios = require("axios");
 const NodeCache = require("node-cache");
 const sax = require("sax");
-const fs = require("fs"); //added to support/api/wordcount/agency-fast/:slug
-const path = require("path"); //added to support/api/wordcount/agency-fast/:slug
 const cors = require("cors");
 
 const app = express();
