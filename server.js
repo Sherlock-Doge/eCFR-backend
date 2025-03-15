@@ -433,119 +433,116 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
 
 
     //recent edit below
-try {
-  const parser = sax.createStream(true);
-  let currentSection = null,
-      currentText = "",
-      captureText = false;
-  const stack = [];
+    
+const parser = sax.createStream(true);
+let currentSection = null,
+    currentText = "",
+    captureText = false;
+const stack = [];
 
-  // 🔓 On tag open
-  parser.on("opentag", (node) => {
-    const { name, attributes } = node;
+// 🔓 On tag open
+parser.on("opentag", (node) => {
+  const { name, attributes } = node;
 
-    if (name.startsWith("DIV") && attributes.TYPE && attributes.N) {
-      stack.push({ type: attributes.TYPE.toLowerCase(), number: attributes.N });
-
-      if (
-        attributes.TYPE.toLowerCase() === "section" &&
-        sectionSet.has(attributes.N)
-      ) {
-        currentSection = {
-          section: attributes.N,
-          heading: attributes.HEADING || "",
-          title: titleNumber,
-          content: "",
-          url: `https://www.ecfr.gov/current/title-${titleNumber}/section-${attributes.N}`,
-          matchType: "",
-          relevanceScore: 0,
-          issueDate: issueDate,
-        };
-        currentText = "";
-      }
-    }
+  if (name.startsWith("DIV") && attributes.TYPE && attributes.N) {
+    stack.push({ type: attributes.TYPE.toLowerCase(), number: attributes.N });
 
     if (
-      currentSection &&
-      ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(name)
+      attributes.TYPE.toLowerCase() === "section" &&
+      sectionSet.has(attributes.N)
     ) {
-      captureText = true;
+      currentSection = {
+        section: attributes.N,
+        heading: attributes.HEADING || "",
+        title: titleNumber,
+        content: "",
+        url: `https://www.ecfr.gov/current/title-${titleNumber}/section-${attributes.N}`,
+        matchType: "",
+        relevanceScore: 0,
+        issueDate: issueDate,
+      };
+      currentText = "";
     }
-  });
+  }
 
-  // 📥 Text accumulation
-  parser.on("text", (text) => {
-    if (captureText && currentSection) {
-      currentText += text.trim() + " ";
-    }
-  });
+  if (
+    currentSection &&
+    ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(name)
+  ) {
+    captureText = true;
+  }
+});
 
-  // 🔒 On tag close
-  parser.on("closetag", (tag) => {
-    if (captureText && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(tag)) {
-      captureText = false;
-    }
+// 📥 Text accumulation
+parser.on("text", (text) => {
+  if (captureText && currentSection) {
+    currentText += text.trim() + " ";
+  }
+});
 
-    if (tag.startsWith("DIV") && stack.length > 0) {
-      const popped = stack.pop();
+// 🔒 On tag close
+parser.on("closetag", (tag) => {
+  if (captureText && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(tag)) {
+    captureText = false;
+  }
 
-      if (
-        popped.type === "section" &&
-        currentSection &&
-        popped.number === currentSection.section
-      ) {
-        const textLower = currentText.toLowerCase();
-        const headingLower = currentSection.heading.toLowerCase();
-        const isHeadingMatch = headingLower.includes(query);
-        const isBodyMatch = textLower.includes(query);
+  if (tag.startsWith("DIV") && stack.length > 0) {
+    const popped = stack.pop();
 
-        if (isHeadingMatch || isBodyMatch) {
-          currentSection.content = currentText.trim();
-          currentSection.relevanceScore = isHeadingMatch ? 2 : 1;
-          currentSection.matchType = isHeadingMatch
-            ? "Heading Match"
-            : "Body Text Match";
+    if (
+      popped.type === "section" &&
+      currentSection &&
+      popped.number === currentSection.section
+    ) {
+      const textLower = currentText.toLowerCase();
+      const headingLower = currentSection.heading.toLowerCase();
+      const isHeadingMatch = headingLower.includes(query);
+      const isBodyMatch = textLower.includes(query);
 
-          matchedResults.push({
-            section: currentSection.section,
-            heading: currentSection.heading,
-            title: `Title ${currentSection.title}`,
-            excerpt: currentSection.content.substring(0, 500) + "...",
-            link: currentSection.url,
-            matchType: currentSection.matchType,
-            issueDate: currentSection.issueDate,
-          });
-        }
+      if (isHeadingMatch || isBodyMatch) {
+        currentSection.content = currentText.trim();
+        currentSection.relevanceScore = isHeadingMatch ? 2 : 1;
+        currentSection.matchType = isHeadingMatch
+          ? "Heading Match"
+          : "Body Text Match";
 
-        currentSection = null;
-        currentText = "";
+        matchedResults.push({
+          section: currentSection.section,
+          heading: currentSection.heading,
+          title: `Title ${currentSection.title}`,
+          excerpt: currentSection.content.substring(0, 500) + "...",
+          link: currentSection.url,
+          matchType: currentSection.matchType,
+          issueDate: currentSection.issueDate,
+        });
       }
+
+      currentSection = null;
+      currentText = "";
     }
-  });
+  }
+});
 
-  // 🧠 Log result count per Title after stream ends
-  parser.on("end", () => {
-    const titleResults = matchedResults.filter(
-      (r) => r.title === `Title ${titleNumber}`
-    );
-    console.log(
-      `✅ Completed Title ${titleNumber} → ${titleResults.length} matches added`
-    );
-  });
-
-  // 🛑 Handle parser error
-  parser.on("error", (err) =>
-    console.error(`❌ SAX error Title ${titleNumber}:`, err.message)
+// 🧠 Log result count per Title after stream ends
+parser.on("end", () => {
+  const titleResults = matchedResults.filter(
+    (r) => r.title === `Title ${titleNumber}`
   );
-
-  // 📡 Begin streaming and parsing
-  await new Promise((resolve, reject) =>
-    response.data.pipe(parser).on("end", resolve).on("error", reject)
+  console.log(
+    `✅ Completed Title ${titleNumber} → ${titleResults.length} matches added`
   );
+});
 
-} catch (err) {
-  console.error(`🔥 Failed processing Title ${titleNumber}:`, err.message);
-}
+// 🛑 Handle parser error
+parser.on("error", (err) =>
+  console.error(`❌ SAX error Title ${titleNumber}:`, err.message)
+);
+
+// 📡 Begin streaming and parsing (no extra try/catch needed!)
+await new Promise((resolve, reject) =>
+  response.data.pipe(parser).on("end", resolve).on("error", reject)
+);
+
 
 
    //recent edit above
