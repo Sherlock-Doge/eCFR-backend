@@ -10,8 +10,8 @@ const app = express();
 app.use(cors());
 const PORT = process.env.PORT || 10000;
 const BASE_URL = "https://www.ecfr.gov";
-const VERSIONER = ${BASE_URL}/api/versioner/v1`;
-const ADMIN = ${BASE_URL}/api/admin/v1`;
+const VERSIONER = `${BASE_URL}/api/versioner/v1`;
+const ADMIN = `${BASE_URL}/api/admin/v1`;
 
 const wordCountCache = new NodeCache({ stdTTL: 5184000, checkperiod: 86400 });
 const metadataCache = new NodeCache({ stdTTL: 86400, checkperiod: 3600 });
