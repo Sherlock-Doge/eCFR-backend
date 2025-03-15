@@ -433,7 +433,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
 
 
     //recent edit below
-     const parser = sax.createStream(true);
+  const parser = sax.createStream(true);
 let currentSection = null,
     currentText = "",
     captureText = false;
