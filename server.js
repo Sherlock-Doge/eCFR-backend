@@ -353,9 +353,10 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
     }
   }
 
-  //recent edit below
+  //RECENT EDIT BELOW:
+
   
- try {
+  try {
   for (const titleMeta of titles) {
     const titleNumber = parseInt(titleMeta.number);
 
@@ -402,9 +403,10 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
       }
       return null;
     };
-      
-//recent edit above
-      
+
+    // RECENT EDIT ABOVE
+
+
       if (agencyFilter && scopedAgencyRefs.length > 0) {
         const matchingRefs = scopedAgencyRefs.filter(ref => ref.title === titleNumber);
         matchingRefs.forEach(ref => {
@@ -431,94 +433,72 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
         timeout: 60000
       });
 
+      const parser = sax.createStream(true);
+      let currentSection = null, currentText = "", captureText = false;
+      const stack = [];
 
-    //recent edit below
-    
-const parser = sax.createStream(true);
-let currentSection = null, currentText = "", captureText = false;
-const stack = [];
+      parser.on("opentag", (node) => {
+        const { name, attributes } = node;
+        if (name.startsWith("DIV") && attributes.TYPE && attributes.N) {
+          stack.push({ type: attributes.TYPE.toLowerCase(), number: attributes.N });
+          if (attributes.TYPE.toLowerCase() === "section" && sectionSet.has(attributes.N)) {
+            currentSection = {
+              section: attributes.N,
+              heading: attributes.HEADING || "",
+              title: titleNumber,
+              content: "",
+              url: `https://www.ecfr.gov/current/title-${titleNumber}/section-${attributes.N}`,
+              matchType: "",
+              relevanceScore: 0,
+              issueDate: issueDate
+            };
+            currentText = "";
+          }
+        }
+        if (currentSection && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(name)) {
+          captureText = true;
+        }
+      });
 
-parser.on("opentag", (node) => {
-  const { name, attributes } = node;
+      parser.on("text", (text) => {
+        if (captureText && currentSection) currentText += text.trim() + " ";
+      });
 
-  if (name.startsWith("DIV") && attributes.TYPE && attributes.N) {
-    stack.push({ type: attributes.TYPE.toLowerCase(), number: attributes.N });
+      parser.on("closetag", (tag) => {
+        if (captureText && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(tag)) captureText = false;
+        if (tag.startsWith("DIV") && stack.length > 0) {
+          const popped = stack.pop();
+          if (popped.type === "section" && currentSection && popped.number === currentSection.section) {
+            const textLower = currentText.toLowerCase();
+            const headingLower = currentSection.heading.toLowerCase();
+            const isHeadingMatch = headingLower.includes(query);
+            const isBodyMatch = textLower.includes(query);
+            if (isHeadingMatch || isBodyMatch) {
+              currentSection.content = currentText.trim();
+              currentSection.relevanceScore = isHeadingMatch ? 2 : 1;
+              currentSection.matchType = isHeadingMatch ? "Heading Match" : "Body Text Match";
 
-    if (attributes.TYPE.toLowerCase() === "section" && sectionSet.has(attributes.N)) {
-      currentSection = {
-        section: attributes.N,
-        heading: attributes.HEADING || "",
-        title: titleNumber,
-        content: "",
-        url: `https://www.ecfr.gov/current/title-${titleNumber}/section-${attributes.N}`,
-        matchType: "",
-        relevanceScore: 0,
-        issueDate: issueDate
-      };
-      currentText = "";
+              matchedResults.push({
+                section: currentSection.section,
+                heading: currentSection.heading,
+                title: `Title ${currentSection.title}`,
+                excerpt: currentSection.content.substring(0, 500) + "...",
+                link: currentSection.url,
+                matchType: currentSection.matchType,
+                issueDate: currentSection.issueDate
+              });
+            }
+            currentSection = null;
+            currentText = "";
+          }
+        }
+      });
+
+      parser.on("error", (err) => console.error(`❌ SAX error Title ${titleNumber}:`, err.message));
+      await new Promise((resolve, reject) =>
+        response.data.pipe(parser).on("end", resolve).on("error", reject)
+      );
     }
-  }
-
-  if (currentSection && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(name)) {
-    captureText = true;
-  }
-});
-
-parser.on("text", (text) => {
-  if (captureText && currentSection) currentText += text.trim() + " ";
-});
-
-parser.on("closetag", (tag) => {
-  if (captureText && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(tag)) captureText = false;
-
-  if (tag.startsWith("DIV") && stack.length > 0) {
-    const popped = stack.pop();
-    if (popped.type === "section" && currentSection && popped.number === currentSection.section) {
-      const textLower = currentText.toLowerCase();
-      const headingLower = currentSection.heading.toLowerCase();
-      const isHeadingMatch = headingLower.includes(query);
-      const isBodyMatch = textLower.includes(query);
-
-      if (isHeadingMatch || isBodyMatch) {
-        currentSection.content = currentText.trim();
-        currentSection.relevanceScore = isHeadingMatch ? 2 : 1;
-        currentSection.matchType = isHeadingMatch ? "Heading Match" : "Body Text Match";
-
-        matchedResults.push({
-          section: currentSection.section,
-          heading: currentSection.heading,
-          title: `Title ${currentSection.title}`,
-          excerpt: currentSection.content.substring(0, 500) + "...",
-          link: currentSection.url,
-          matchType: currentSection.matchType,
-          issueDate: currentSection.issueDate
-        });
-      }
-
-      currentSection = null;
-      currentText = "";
-    }
-  }
-});
-
-parser.on("end", () => {
-  const titleResults = matchedResults.filter(r => r.title === `Title ${titleNumber}`);
-  console.log(`✅ Completed Title ${titleNumber} → ${titleResults.length} matches added`);
-});
-
-parser.on("error", (err) =>
-  console.error(`❌ SAX error Title ${titleNumber}:`, err.message)
-);
-
-// 📡 Begin streaming and parsing
-await new Promise((resolve, reject) =>
-  response.data.pipe(parser).on("end", resolve).on("error", reject)
-);
-
-
-
-
-   //recent edit above
 
     // Final ordering by relevanceScore (2 → 1) then by section number
     const finalResults = matchedResults.sort((a, b) => {
