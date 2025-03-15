@@ -369,11 +369,13 @@ try {
     // 📂 Begin parsing this Title
     console.log(`📂 Cyber Squirrel: Parsing Title ${titleNumber} (${titleMeta.name})`);
 
-    const issueDate = titleMeta.latest_issue_date || titleMeta.up_to_date_as_of;
+    // ⛳ Move this to an *assignment*, not a declaration if `issueDate` already exists above
+    let issueDate = titleMeta.latest_issue_date || titleMeta.up_to_date_as_of;
     if (!issueDate) {
       console.log(`⚠️ Skipping Title ${titleNumber} — missing issueDate`);
       continue;
     }
+
 //RECENT EDIT ABOVE
 
       const issueDate = titleMeta.latest_issue_date || titleMeta.up_to_date_as_of;
