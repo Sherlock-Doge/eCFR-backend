@@ -494,6 +494,13 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
         }
       });
 
+    //RECENT EDIT HERE:
+    
+       parser.on("end", () => {
+        const titleResults = matchedResults.filter(r => r.title === `Title ${titleNumber}`);
+        console.log(`✅ Completed Title ${titleNumber} → ${titleResults.length} matches added`);
+      });
+
       parser.on("error", (err) => console.error(`❌ SAX error Title ${titleNumber}:`, err.message));
       await new Promise((resolve, reject) =>
         response.data.pipe(parser).on("end", resolve).on("error", reject)
