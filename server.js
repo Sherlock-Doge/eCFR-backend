@@ -24,7 +24,6 @@ app.use((req, res, next) => {
 
 
 // ========== Titles ==========
-
 app.get("/api/titles", async (req, res) => {
   try {
     let cachedTitles = metadataCache.get("titlesMetadata");
@@ -292,7 +291,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
 });
 
 
-// 🐿️ Cyber Squirrel Search Engine 
+//============= 🐿️ Cyber Squirrel Search Engine =============
 app.get("/api/search/cyber-squirrel", async (req, res) => {
   const query = (req.query.q || "").toLowerCase().trim();
   const titleFilter = req.query.title ? parseInt(req.query.title) : null;
