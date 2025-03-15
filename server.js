@@ -57,6 +57,47 @@ app.get("/api/agencies", async (req, res) => {
   }
 });
 
+//recent edit below:
+
+// ========== Agency ↔ Title Mapping ==========
+
+app.get("/api/agency-title-map", async (req, res) => {
+  try {
+    const agencies = metadataCache.get("agenciesMetadata") || [];
+    const map = {};
+
+    agencies.forEach(agency => {
+      const slug = agency.slug;
+      const titles = (agency.cfr_references || []).map(ref => ref.title);
+      if (slug && titles.length > 0) {
+        map[slug] = [...new Set(titles)];
+      }
+    });
+
+    res.json({ map });
+  } catch (err) {
+    console.error("🚨 Failed to generate agency-title map:", err.message);
+    res.status(500).json({ error: "Failed to generate agency-title map" });
+  }
+});
+
+
+//recent edit above
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // ========== Word Count by Title ==========
 
 app.get("/api/wordcount/:titleNumber", async (req, res) => {
