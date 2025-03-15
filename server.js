@@ -30,7 +30,7 @@ app.get("/api/titles", async (req, res) => {
   try {
     let cachedTitles = metadataCache.get("titlesMetadata");
     if (!cachedTitles) {
-      const response = await axios.get(${VERSIONER}/titles.json);
+      const response = await axios.get(`${VERSIONER}/titles.json`);
       cachedTitles = response.data.titles.map(t => ({
         number: t.number,
         name: t.name,
@@ -50,7 +50,7 @@ app.get("/api/titles", async (req, res) => {
 
 app.get("/api/agencies", async (req, res) => {
   try {
-    const response = await axios.get(${ADMIN}/agencies.json);
+    const response = await axios.get(`${ADMIN}/agencies.json`);
     const agencies = response.data.agencies || response.data;
     metadataCache.set("agenciesMetadata", agencies);
     res.json({ agencies });
@@ -63,7 +63,7 @@ app.get("/api/agencies", async (req, res) => {
 
 app.get("/api/wordcount/:titleNumber", async (req, res) => {
   const titleNumber = req.params.titleNumber;
-  const cacheKey = wordCount-${titleNumber};
+  const cacheKey = `wordCount-${titleNumber}`;
   const cached = wordCountCache.get(cacheKey);
   if (cached !== undefined) return res.json({ title: titleNumber, wordCount: cached });
 
@@ -73,7 +73,7 @@ app.get("/api/wordcount/:titleNumber", async (req, res) => {
     const issueDate = meta?.latest_issue_date;
     if (!issueDate) return res.json({ title: titleNumber, wordCount: 0 });
 
-    const xmlUrl = ${VERSIONER}/full/${issueDate}/title-${titleNumber}.xml;
+    const xmlUrl = `${VERSIONER}/full/${issueDate}/title-${titleNumber}.xml`;
     const wordCount = await streamAndCountWords(xmlUrl);
     wordCountCache.set(cacheKey, wordCount);
     res.json({ title: titleNumber, wordCount });
@@ -161,7 +161,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
     const chapter = ref.chapter || null;
     const subtitle = ref.subtitle || null;
 
-    const cacheKey = agency-scope-${slug}-title-${title}-${chapter || subtitle || "none"};
+    const cacheKey = `agency-scope-${slug}-title-${title}-${chapter || subtitle || "none"}`;
     let cachedCount = wordCountCache.get(cacheKey);
     if (cachedCount !== undefined) {
       breakdowns.push({ title, chapter: chapter || subtitle || null, wordCount: cachedCount });
@@ -175,7 +175,7 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
       const issueDate = meta?.latest_issue_date;
       if (!issueDate) continue;
 
-      const structureUrl = ${VERSIONER}/structure/${issueDate}/title-${title}.json;
+      const structureUrl = `${VERSIONER}/structure/${issueDate}/title-${title}.json`;
       const structure = (await axios.get(structureUrl)).data;
 
       const sectionSet = new Set();
@@ -207,13 +207,13 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
       }
 
       if (!sectionSet.size) {
-        console.warn(⚠️ No sections under matched node for Title ${title}, Chapter ${chapter || subtitle}, Type ${matchedNode?.type || "N/A"});
+        console.warn(`⚠️ No sections under matched node for Title ${title}, Chapter ${chapter || subtitle}, Type ${matchedNode?.type || "N/A"}`);
         breakdowns.push({ title, chapter: chapter || subtitle || null, wordCount: 0 });
         continue;
       }
 
       // STEP 2: XML streaming word count
-      const xmlUrl = ${VERSIONER}/full/${issueDate}/title-${title}.xml;
+      const xmlUrl = `${VERSIONER}/full/${issueDate}/title-${title}.xml`;
       const response = await axios({ method: "GET", url: xmlUrl, responseType: "stream", timeout: 60000 });
       const parser = sax.createStream(true);
 
@@ -259,13 +259,13 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
       });
 
       parser.on("error", (err) => {
-        console.error(🚨 XML parse error for agency ${agency.name}:, err.message);
+        console.error(`🚨 XML parse error for agency ${agency.name}:`, err.message);
         res.status(500).json({ error: "XML parse error" });
       });
 
       response.data.pipe(parser);
     } catch (e) {
-      console.error(🚨 Error processing agency ${agency.name}:, e.message);
+      console.error(`🚨 Error processing agency ${agency.name}:`, e.message);
     }
   }
 });
@@ -283,7 +283,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
   const agencyFilter = normalizeSlug(rawSlug);
 
   const matchedResults = [];
-  console.log(🛫 Cyber Squirrel Search → Query: "${query}" | Title: ${titleFilter || "None"} | Agency: ${agencyFilter || "None"});
+  console.log(`🛫 Cyber Squirrel Search → Query: "${query}" | Title: ${titleFilter || "None"} | Agency: ${agencyFilter || "None"}`);
 
   // STEP 1: Exit early if no input
   if (!query && !titleFilter && !agencyFilter) {
@@ -297,10 +297,10 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
     const titleMeta = titles.find(t => parseInt(t.number) === titleFilter);
     if (titleMeta) {
       matchedResults.push({
-        section: Title ${titleFilter},
+        section: `Title ${titleFilter}`,
         heading: titleMeta.name || "",
         excerpt: "Root of selected title.",
-        link: https://www.ecfr.gov/current/title-${titleFilter}
+        link: `https://www.ecfr.gov/current/title-${titleFilter}`
       });
     }
     return res.json({ results: matchedResults });
@@ -321,13 +321,13 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
         const chapter = ref.chapter || null;
         const subtitle = ref.subtitle || null;
         const url = subtitle
-          ? https://www.ecfr.gov/current/title-${title}/subtitle-${subtitle}
+          ? `https://www.ecfr.gov/current/title-${title}/subtitle-${subtitle}`
           : chapter
-            ? https://www.ecfr.gov/current/title-${title}/chapter-${chapter}
-            : https://www.ecfr.gov/current/title-${title};
+            ? `https://www.ecfr.gov/current/title-${title}/chapter-${chapter}`
+            : `https://www.ecfr.gov/current/title-${title}`;
         matchedResults.push({
           section: agency.name,
-          heading: CFR Reference: Title ${title}${subtitle ?  Subtitle ${subtitle} : chapter ?  Chapter ${chapter} : ""},
+          heading: `CFR Reference: Title ${title}${subtitle ? ` Subtitle ${subtitle}` : chapter ? ` Chapter ${chapter}` : ""}`,
           excerpt: "Root of selected agency CFR reference.",
           link: url
         });
@@ -358,14 +358,14 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
       const titleNumber = parseInt(titleMeta.number);
       if (titleFilter && titleNumber !== titleFilter) continue;
       if (agencyFilter && !scopedAgencyRefs.some(ref => ref.title === titleNumber)) {
-        console.log(🚫 Skipping Title ${titleNumber} — not in agency scope);
+        console.log(`🚫 Skipping Title ${titleNumber} — not in agency scope`);
         continue;
       }
 
       const issueDate = titleMeta.latest_issue_date || titleMeta.up_to_date_as_of;
       if (!issueDate) continue;
 
-      const structureUrl = ${VERSIONER}/structure/${issueDate}/title-${titleNumber}.json;
+      const structureUrl = `${VERSIONER}/structure/${issueDate}/title-${titleNumber}.json`;
       const structure = (await axios.get(structureUrl)).data;
 
       const sectionSet = new Set();
@@ -402,7 +402,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
 
       if (!sectionSet.size) continue;
 
-      const xmlUrl = ${VERSIONER}/full/${issueDate}/title-${titleNumber}.xml;
+      const xmlUrl = `${VERSIONER}/full/${issueDate}/title-${titleNumber}.xml`;
       const response = await axios({
         method: "GET",
         url: xmlUrl,
@@ -426,7 +426,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
               heading: attributes.HEADING || "",
               title: titleNumber,
               content: "",
-              url: https://www.ecfr.gov/current/title-${titleNumber}/section-${attributes.N},
+              url: `https://www.ecfr.gov/current/title-${titleNumber}/section-${attributes.N}`,
               matchType: "",
               relevanceScore: 0,
               issueDate: issueDate
@@ -460,7 +460,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
               matchedResults.push({
                 section: currentSection.section,
                 heading: currentSection.heading,
-                title: Title ${currentSection.title},
+                title: `Title ${currentSection.title}`,
                 excerpt: currentSection.content.substring(0, 500) + "...",
                 link: currentSection.url,
                 matchType: currentSection.matchType,
@@ -473,7 +473,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
         }
       });
 
-      parser.on("error", (err) => console.error(❌ SAX error Title ${titleNumber}:, err.message));
+      parser.on("error", (err) => console.error(`❌ SAX error Title ${titleNumber}:`, err.message));
       await new Promise((resolve, reject) =>
         response.data.pipe(parser).on("end", resolve).on("error", reject)
       );
@@ -486,7 +486,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
       return a.section.localeCompare(b.section);
     });
 
-    console.log(🎯 Search Done → ${finalResults.length} matches);
+    console.log(`🎯 Search Done → ${finalResults.length} matches`);
     res.json({ results: finalResults });
   } catch (err) {
     console.error("🔥 Search engine failure:", err.message);
@@ -499,7 +499,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
 // ===================== Search Count =====================
 app.get("/api/search/count", async (req, res) => {
   try {
-    const response = await axios.get(${BASE_URL}/api/search/v1/count, { params: req.query });
+    const response = await axios.get(`${BASE_URL}/api/search/v1/count`, { params: req.query });
     res.json(response.data);
   } catch (e) {
     console.error("🚨 Search Count error:", e.message);
@@ -514,7 +514,7 @@ app.get("/api/search/suggestions", async (req, res) => {
   if (!query) return res.json({ suggestions: [] });
 
   try {
-    const cacheKey = suggestions-${query};
+    const cacheKey = `suggestions-${query}`;
     if (suggestionCache.has(cacheKey)) return res.json({ suggestions: suggestionCache.get(cacheKey) });
 
     const titles = metadataCache.get("titlesMetadata") || [];
@@ -524,7 +524,7 @@ app.get("/api/search/suggestions", async (req, res) => {
 
     // 1️⃣ Local title/agency matches
     titles.forEach(t => {
-      if (t.name.toLowerCase().includes(query)) suggestions.push(Title ${t.number}: ${t.name});
+      if (t.name.toLowerCase().includes(query)) suggestions.push(`Title ${t.number}: ${t.name}`);
     });
     agencies.forEach(a => {
       if (a.name.toLowerCase().includes(query)) suggestions.push(a.name);
@@ -540,7 +540,7 @@ app.get("/api/search/suggestions", async (req, res) => {
 
     // 3️⃣ ECFR /api/search/v1/suggestions merge (retry)
     try {
-      const ecfrResponse = await axios.get(${BASE_URL}/api/search/v1/suggestions?query=${encodeURIComponent(query)});
+      const ecfrResponse = await axios.get(`${BASE_URL}/api/search/v1/suggestions?query=${encodeURIComponent(query)}`);
       if (Array.isArray(ecfrResponse.data.suggestions)) {
         suggestions.push(...ecfrResponse.data.suggestions);
       }
@@ -562,7 +562,7 @@ app.get("/api/search/suggestions", async (req, res) => {
 // ===================== Metadata Preload =====================
 (async function preloadMetadata() {
   try {
-    const titlesRes = await axios.get(${VERSIONER}/titles.json);
+    const titlesRes = await axios.get(`${VERSIONER}/titles.json`);
     metadataCache.set("titlesMetadata", titlesRes.data.titles.map(t => ({
       number: t.number,
       name: t.name,
@@ -571,7 +571,7 @@ app.get("/api/search/suggestions", async (req, res) => {
       up_to_date_as_of: t.up_to_date_as_of
     })));
 
-    const agenciesRes = await axios.get(${ADMIN}/agencies.json);
+    const agenciesRes = await axios.get(`${ADMIN}/agencies.json`);
     const agencies = agenciesRes.data.agencies || agenciesRes.data;
     metadataCache.set("agenciesMetadata", agencies);
 
@@ -585,7 +585,7 @@ app.get("/api/search/suggestions", async (req, res) => {
 
 // ===================== Start Server =====================
 app.listen(PORT, () => {
-  console.log(🚀 eCFR Analyzer server running on port ${PORT});
+  console.log(`🚀 eCFR Analyzer server running on port ${PORT}`);
 });
 
 
@@ -604,7 +604,7 @@ app.get("/api/test-agency-chapter-structure/:title/:chapter", async (req, res) =
     const issueDate = meta?.latest_issue_date;
     if (!issueDate) return res.status(400).json({ error: "Missing issue date for title" });
 
-    const structureUrl = ${VERSIONER}/structure/${issueDate}/title-${titleNumber}.json;
+    const structureUrl = `${VERSIONER}/structure/${issueDate}/title-${titleNumber}.json`;
     const structure = (await axios.get(structureUrl)).data;
 
     // Recursive walk function
@@ -613,12 +613,12 @@ app.get("/api/test-agency-chapter-structure/:title/:chapter", async (req, res) =
       visitedNodes.add(node.identifier);
 
       const updatedPath = [...path];
-      if (node.type === "chapter") updatedPath.push(Chapter ${node.identifier});
-      else if (node.type === "subchapter") updatedPath.push(Subchapter ${node.identifier});
-      else if (node.type === "part") updatedPath.push(Part ${node.identifier});
-      else if (node.type === "subpart") updatedPath.push(Subpart ${node.identifier});
+      if (node.type === "chapter") updatedPath.push(`Chapter ${node.identifier}`);
+      else if (node.type === "subchapter") updatedPath.push(`Subchapter ${node.identifier}`);
+      else if (node.type === "part") updatedPath.push(`Part ${node.identifier}`);
+      else if (node.type === "subpart") updatedPath.push(`Subpart ${node.identifier}`);
       else if (node.type === "section") {
-        updatedPath.push(Section ${node.identifier});
+        updatedPath.push(`Section ${node.identifier}`);
         results.push({ path: updatedPath.join(" → "), type: "section" });
         return;
       }
@@ -636,12 +636,12 @@ app.get("/api/test-agency-chapter-structure/:title/:chapter", async (req, res) =
     const chapterNode = structure.children?.find(child =>
       child.type === "chapter" && child.identifier === chapterId
     );
-    if (!chapterNode) return res.status(404).json({ error: Chapter ${chapterId} not found in Title ${titleNumber} });
+    if (!chapterNode) return res.status(404).json({ error: `Chapter ${chapterId} not found in Title ${titleNumber}` });
 
     walk(chapterNode);
 
     return res.json({
-      title: Title ${titleNumber},
+      title: `Title ${titleNumber}`,
       chapter: chapterId,
       nodeCount: results.length,
       structure: results
@@ -663,7 +663,7 @@ app.get("/api/debug-structure/:titleNumber", async (req, res) => {
     return res.status(400).json({ error: "Invalid or missing title metadata" });
   }
 
-  const structureUrl = ${VERSIONER}/structure/${meta.latest_issue_date}/title-${titleNumber}.json;
+  const structureUrl = `${VERSIONER}/structure/${meta.latest_issue_date}/title-${titleNumber}.json`;
 
   try {
     const response = await axios.get(structureUrl);
@@ -672,7 +672,7 @@ app.get("/api/debug-structure/:titleNumber", async (req, res) => {
     const nodes = [];
 
     function traverse(node, path = []) {
-      const currentPath = [...path, ${node.type}(${node.identifier || "?"})];
+      const currentPath = [...path, `${node.type}(${node.identifier || "?"})`];
       nodes.push({
         type: node.type,
         identifier: node.identifier || null,
@@ -687,7 +687,7 @@ app.get("/api/debug-structure/:titleNumber", async (req, res) => {
     traverse(root);
 
     res.json({
-      title: Title ${titleNumber},
+      title: `Title ${titleNumber}`,
       totalNodes: nodes.length,
       nodes
     });
