@@ -353,39 +353,58 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
     }
   }
 
-  try {
-    for (const titleMeta of titles) {
-      const titleNumber = parseInt(titleMeta.number);
-      if (titleFilter && titleNumber !== titleFilter) continue;
-      if (agencyFilter && !scopedAgencyRefs.some(ref => ref.title === titleNumber)) {
-        console.log(`🚫 Skipping Title ${titleNumber} — not in agency scope`);
-        continue;
-      }
+  //recent edit below
+  
+ try {
+  for (const titleMeta of titles) {
+    const titleNumber = parseInt(titleMeta.number);
 
-      const issueDate = titleMeta.latest_issue_date || titleMeta.up_to_date_as_of;
-      if (!issueDate) continue;
+    // 🔍 Title scope filter
+    if (titleFilter && titleNumber !== titleFilter) continue;
 
-      const structureUrl = `${VERSIONER}/structure/${issueDate}/title-${titleNumber}.json`;
-      const structure = (await axios.get(structureUrl)).data;
+    // 🚫 Skip if agency filter exists and this title is not within agency scope
+    if (agencyFilter && !scopedAgencyRefs.some(ref => ref.title === titleNumber)) {
+      console.log(`🚫 Skipping Title ${titleNumber} — not in agency scope`);
+      continue;
+    }
 
-      const sectionSet = new Set();
-      const collectSections = (node) => {
-        if (node.type === "section") sectionSet.add(node.identifier);
-        if (node.children) node.children.forEach(collectSections);
-      };
+    // 📂 Begin parsing this Title
+    console.log(`📂 Cyber Squirrel: Parsing Title ${titleNumber} (${titleMeta.name})`);
 
-      const findNode = (node, type, id) => {
-        if (!node || typeof node !== "object") return null;
-        if (node.type === type && node.identifier === id) return node;
-        if (node.children) {
-          for (const child of node.children) {
-            const result = findNode(child, type, id);
-            if (result) return result;
-          }
+    // ✅ Declare issueDate safely
+    const issueDate = titleMeta.latest_issue_date || titleMeta.up_to_date_as_of;
+    if (!issueDate) {
+      console.log(`⚠️ Skipping Title ${titleNumber} — missing issueDate`);
+      continue;
+    }
+
+    // 🗂 Confirm title + issueDate
+    console.log(`🗂 Title ${titleNumber} → issueDate: ${issueDate}`);
+
+    // 🎯 Now proceed with structure fetch and section collection as before
+    const structureUrl = `${VERSIONER}/structure/${issueDate}/title-${titleNumber}.json`;
+    const structure = (await axios.get(structureUrl)).data;
+
+    const sectionSet = new Set();
+    const collectSections = (node) => {
+      if (node.type === "section") sectionSet.add(node.identifier);
+      if (node.children) node.children.forEach(collectSections);
+    };
+
+    const findNode = (node, type, id) => {
+      if (!node || typeof node !== "object") return null;
+      if (node.type === type && node.identifier === id) return node;
+      if (node.children) {
+        for (const child of node.children) {
+          const result = findNode(child, type, id);
+          if (result) return result;
         }
-        return null;
-      };
-
+      }
+      return null;
+    };
+      
+//recent edit above
+      
       if (agencyFilter && scopedAgencyRefs.length > 0) {
         const matchingRefs = scopedAgencyRefs.filter(ref => ref.title === titleNumber);
         matchingRefs.forEach(ref => {
