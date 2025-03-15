@@ -354,26 +354,13 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
   }
 
 try {
-  for (const titleMeta of titles) {
-    const titleNumber = parseInt(titleMeta.number);
-
-    // 🔍 Title scope filter
-    if (titleFilter && titleNumber !== titleFilter) continue;
-
-    // 🚫 Skip if agency filter exists and this title is not within agency scope
-    if (agencyFilter && !scopedAgencyRefs.some(ref => ref.title === titleNumber)) {
-      console.log(`🚫 Skipping Title ${titleNumber} — not in agency scope`);
-      continue;
-    }
-
-    // Log start of title parse
-    console.log(`📂 Cyber Squirrel: Now parsing Title ${titleNumber} (${titleMeta.name})`);
-
-    const issueDate = titleMeta.latest_issue_date || titleMeta.up_to_date_as_of;
-    if (!issueDate) {
-      console.log(`⚠️ Skipping Title ${titleNumber} — missing issueDate`);
-      continue;
-    }
+    for (const titleMeta of titles) {
+      const titleNumber = parseInt(titleMeta.number);
+      if (titleFilter && titleNumber !== titleFilter) continue;
+      if (agencyFilter && !scopedAgencyRefs.some(ref => ref.title === titleNumber)) {
+        console.log(🚫 Skipping Title ${titleNumber} — not in agency scope);
+        continue;
+      }
 
 //RECENT EDIT ABOVE
 
