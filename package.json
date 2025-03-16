@@ -1,7 +1,7 @@
 {
   "name": "ecfr-backend",
-  "version": "1.1.3",
-  "description": "Backend service to fetch eCFR API data with title-level word count functionality",
+  "version": "1.1.4",
+  "description": "Backend service to fetch eCFR API data with title-level word count and optimized search engine functionality",
   "main": "server.js",
   "dependencies": {
     "express": "^4.17.1",
@@ -9,7 +9,8 @@
     "cors": "^2.8.5",
     "node-cache": "^5.1.2",
     "jsdom": "^24.0.0",
-    "sax": "^1.2.4"
+    "sax": "^1.2.4",
+    "p-limit": "^4.0.0"
   },
   "scripts": {
     "start": "node server.js"
