@@ -369,7 +369,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
   }
 
   // 🧠 Limit concurrency for SAX streams (adjust as needed)
-  const limit = pLimit(4); // 4 = safe default concurrency
+  const limit = pLimit(1); // 1 = safe default concurrency
 
   const streamTasks = titles.map(titleMeta => limit(async () => {
     const titleNumber = parseInt(titleMeta.number);
