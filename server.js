@@ -314,7 +314,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
 
   const titles = metadataCache.get("titlesMetadata") || [];
   const agencies = metadataCache.get("agenciesMetadata") || [];
-  const indexDir = path.join(__dirname, "ecfr-index-files");
+  const indexDir = path.join(__dirname, "eCFR-index-files");
 
   // 📌 TITLE-ONLY filter (no query)
   if (!query && titleFilter) {
