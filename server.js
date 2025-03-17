@@ -291,35 +291,32 @@ app.get("/api/wordcount/agency/:slug", async (req, res) => {
 });
 
 
-//============= 🐿️ Cyber Squirrel Search Engine =============
+// =============== 🐿️ Cyber Squirrel Search Engine v3.0 — JSON Index-Based ===================
+const fs = require("fs");
+const path = require("path");
 
-// 📦 Concurrency limiter for parallel SAX stream processing
-const pLimit = require("p-limit"); // Make sure this is in your package.json dependencies
-
+// NEW CYBER SQUIRREL ROUTE (JSON-INDEX BASED SEARCH)
 app.get("/api/search/cyber-squirrel", async (req, res) => {
-  // 🔍 Extract query and filters from request
   const query = (req.query.q || "").toLowerCase().trim();
   const titleFilter = req.query.title ? parseInt(req.query.title) : null;
 
   const rawAgencyInput = req.query["agency_slugs[]"] || req.query.agency_slugs || req.query.agency;
-  const rawSlug = Array.isArray(rawAgencyInput) ? rawAgencyInput[0] : rawAgencyInput;
   const normalizeSlug = (val) => typeof val === "string" ? val.toLowerCase().trim().replace(/\s+/g, "-") : "";
-  const agencyFilter = normalizeSlug(rawSlug);
+  const agencyFilter = normalizeSlug(Array.isArray(rawAgencyInput) ? rawAgencyInput[0] : rawAgencyInput);
 
   const matchedResults = [];
   console.log(`🛫 Cyber Squirrel Search → Query: "${query}" | Title: ${titleFilter || "None"} | Agency: ${agencyFilter || "None"}`);
 
-  // 🚫 Exit early if no query and no filters
   if (!query && !titleFilter && !agencyFilter) {
     console.log("⚠️ Empty query and no filters — exiting.");
     return res.json({ results: [] });
   }
 
-  // 📚 Load metadata
   const titles = metadataCache.get("titlesMetadata") || [];
   const agencies = metadataCache.get("agenciesMetadata") || [];
+  const indexDir = path.join(__dirname, "ecfr-index-files");
 
-  // 📌 Title-only filter (no query)
+  // 📌 TITLE-ONLY filter (no query)
   if (!query && titleFilter) {
     const titleMeta = titles.find(t => parseInt(t.number) === titleFilter);
     if (titleMeta) {
@@ -333,7 +330,7 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
     return res.json({ results: matchedResults });
   }
 
-  // 📌 Agency-only filter (no query)
+  // 📌 AGENCY-ONLY filter (no query)
   if (!query && agencyFilter) {
     const agency = agencies.find(a => a.slug === agencyFilter || normalizeSlug(a.name) === agencyFilter);
     if (!agency) return res.json({ results: [] });
@@ -358,174 +355,83 @@ app.get("/api/search/cyber-squirrel", async (req, res) => {
     return res.json({ results: matchedResults });
   }
 
-  // 🔍 Keyword-based search path (with or without filters)
-  const scopedAgencyRefs = [];
-  let agency = null;
+  // 📚 Determine scoped titles (based on filters)
+  const scopedTitles = [];
+  let scopedAgencyRefs = [];
+
   if (agencyFilter) {
-    agency = agencies.find(a => a.slug === agencyFilter || normalizeSlug(a.name) === agencyFilter);
+    const agency = agencies.find(a => a.slug === agencyFilter || normalizeSlug(a.name) === agencyFilter);
     if (agency?.cfr_references?.length > 0) {
-      scopedAgencyRefs.push(...agency.cfr_references);
+      scopedAgencyRefs = agency.cfr_references;
+      scopedTitles.push(...scopedAgencyRefs.map(ref => parseInt(ref.title)));
     }
   }
 
-  // 🧠 Limit concurrency for SAX streams (adjust as needed)
-  const limit = pLimit(1); // 1 = safe default concurrency
-
-  const streamTasks = titles.map(titleMeta => limit(async () => {
-    const titleNumber = parseInt(titleMeta.number);
-    if (titleFilter && titleNumber !== titleFilter) return;
-    if (agencyFilter && !scopedAgencyRefs.some(ref => ref.title === titleNumber)) return;
-
-    const issueDate = titleMeta.latest_issue_date || titleMeta.up_to_date_as_of;
-    if (!issueDate) return;
-
-    // 📂 Fetch structure JSON
-    const structureUrl = `${VERSIONER}/structure/${issueDate}/title-${titleNumber}.json`;
-    let structure;
-    try {
-      structure = (await axios.get(structureUrl)).data;
-    } catch (err) {
-      console.warn(`⚠️ Structure fetch failed for Title ${titleNumber}`);
-      return;
-    }
-
-    // 🎯 Build sectionSet
-    const sectionSet = new Set();
-    const collectSections = node => {
-      if (node.type === "section") sectionSet.add(node.identifier);
-      if (node.children) node.children.forEach(collectSections);
-    };
-    const findNode = (node, type, id) => {
-      if (node.type === type && node.identifier === id) return node;
-      if (node.children) {
-        for (const child of node.children) {
-          const result = findNode(child, type, id);
-          if (result) return result;
-        }
-      }
-      return null;
-    };
-    if (agencyFilter && scopedAgencyRefs.length > 0) {
-      scopedAgencyRefs.filter(ref => ref.title === titleNumber).forEach(ref => {
-        const entryNode = ref.subtitle
-          ? findNode(structure, "subtitle", ref.subtitle)
-          : ref.chapter
-          ? findNode(structure, "chapter", ref.chapter)
-          : structure;
-        if (entryNode) collectSections(entryNode);
-      });
-    } else {
-      collectSections(structure);
-    }
-
-    if (!sectionSet.size) return;
-
-    // 📦 Fetch XML
-    const xmlUrl = `${VERSIONER}/full/${issueDate}/title-${titleNumber}.xml`;
-    let response;
-    try {
-      response = await axios({
-        method: "GET",
-        url: xmlUrl,
-        responseType: "stream",
-        decompress: true,
-        headers: { "Accept-Encoding": "gzip, deflate, br" },
-        timeout: 60000
-      });
-    } catch (err) {
-      console.warn(`❌ XML fetch failed for Title ${titleNumber}: ${err.message}`);
-      return;
-    }
-
-    // 📜 SAX parse XML stream
-    const parser = sax.createStream(true);
-    let currentSection = null, currentText = "", captureText = false, sectionMatched = false;
-    const stack = [];
-
-    parser.on("opentag", (node) => {
-      const { name, attributes } = node;
-      if (name.startsWith("DIV") && attributes.TYPE && attributes.N) {
-        stack.push({ type: attributes.TYPE.toLowerCase(), number: attributes.N });
-        if (attributes.TYPE.toLowerCase() === "section" && sectionSet.has(attributes.N)) {
-          currentSection = {
-            section: attributes.N,
-            heading: attributes.HEADING || "",
-            title: titleNumber,
-            content: "",
-            url: `https://www.ecfr.gov/current/title-${titleNumber}/section-${attributes.N}`,
-            matchType: "",
-            relevanceScore: 0,
-            issueDate
-          };
-          currentText = "";
-          sectionMatched = false;
-        }
-      }
-      if (currentSection && ["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(name)) {
-        captureText = !sectionMatched;
-      }
-    });
-
-    parser.on("text", (text) => {
-      if (captureText && currentSection) currentText += text.trim() + " ";
-    });
-
-    parser.on("closetag", (tag) => {
-      if (["P", "FP", "HD", "HEAD", "GPOTABLE"].includes(tag)) captureText = false;
-      if (tag.startsWith("DIV") && stack.length > 0) {
-        const popped = stack.pop();
-        if (popped.type === "section" && currentSection && popped.number === currentSection.section) {
-          const textLower = currentText.toLowerCase();
-          const headingLower = currentSection.heading.toLowerCase();
-          const isHeadingMatch = headingLower.includes(query);
-          const isBodyMatch = textLower.includes(query);
-          if (isHeadingMatch || isBodyMatch) {
-            currentSection.content = currentText.trim();
-            currentSection.relevanceScore = isHeadingMatch ? 2 : 1;
-            currentSection.matchType = isHeadingMatch ? "Heading Match" : "Body Text Match";
-            matchedResults.push({
-              section: currentSection.section,
-              heading: currentSection.heading,
-              title: `Title ${currentSection.title}`,
-              excerpt: currentSection.content.substring(0, 500) + "...",
-              link: currentSection.url,
-              matchType: currentSection.matchType,
-              issueDate: currentSection.issueDate
-            });
-            sectionMatched = true;
-          }
-          currentSection = null;
-          currentText = "";
-        }
-      }
-    });
-
-    parser.on("error", (err) => {
-      console.error(`❌ SAX error Title ${titleNumber}:`, err.message);
-    });
-
-    await new Promise((resolve, reject) =>
-      response.data.pipe(parser).on("end", resolve).on("error", reject)
-    );
-
-    const count = matchedResults.filter(r => r.title === `Title ${titleNumber}`).length;
-    console.log(`✅ Completed Title ${titleNumber} → ${count} matches`);
-  }));
-
-  // 🚀 Wait for all title streams to finish
-  try {
-    await Promise.allSettled(streamTasks);
-    const finalResults = matchedResults.sort((a, b) => {
-      const scoreDiff = (b.relevanceScore || 0) - (a.relevanceScore || 0);
-      return scoreDiff !== 0 ? scoreDiff : a.section.localeCompare(b.section);
-    });
-    console.log(`🎯 Search Done → ${finalResults.length} matches`);
-    res.json({ results: finalResults });
-  } catch (err) {
-    console.error("🔥 Search engine failure:", err.message);
-    res.status(500).json({ error: "Search engine failure." });
+  if (titleFilter && !scopedTitles.includes(titleFilter)) {
+    scopedTitles.push(titleFilter);
   }
+
+  const filesToLoad = [];
+
+  // 📦 Determine which JSON index files to load
+  const allFiles = fs.readdirSync(indexDir);
+  allFiles.forEach(file => {
+    if (!file.endsWith(".json")) return;
+
+    const titleMatch = file.match(/title-(\d+)/);
+    const titleNum = titleMatch ? parseInt(titleMatch[1]) : null;
+
+    if (titleNum) {
+      if (query && !titleFilter && !agencyFilter) {
+        filesToLoad.push(file); // Query-only: load all files
+      } else if (scopedTitles.includes(titleNum)) {
+        filesToLoad.push(file); // Filtered: load only scoped titles
+      }
+    }
+  });
+
+  // 🔍 Search files
+  for (const fileName of filesToLoad) {
+    try {
+      const filePath = path.join(indexDir, fileName);
+      const content = JSON.parse(fs.readFileSync(filePath, "utf8"));
+
+      for (const section of content) {
+        const headingLower = (section.heading || "").toLowerCase();
+        const bodyLower = (section.content || "").toLowerCase();
+
+        const headingMatch = headingLower.includes(query);
+        const bodyMatch = bodyLower.includes(query);
+
+        if (headingMatch || bodyMatch) {
+          matchedResults.push({
+            section: section.section,
+            heading: section.heading,
+            title: `Title ${section.title}`,
+            excerpt: section.content?.substring(0, 500) + "...",
+            link: section.url,
+            matchType: headingMatch ? "Heading Match" : "Body Text Match",
+            relevanceScore: headingMatch ? 2 : 1
+          });
+        }
+      }
+
+      console.log(`✅ Searched ${fileName} → ${matchedResults.length} matches total so far`);
+    } catch (err) {
+      console.error(`❌ Failed to process ${fileName}: ${err.message}`);
+    }
+  }
+
+  // 📈 Sort by relevance
+  const finalResults = matchedResults.sort((a, b) => {
+    const scoreDiff = (b.relevanceScore || 0) - (a.relevanceScore || 0);
+    return scoreDiff !== 0 ? scoreDiff : a.section.localeCompare(b.section);
+  });
+
+  console.log(`🎯 Search completed → ${finalResults.length} results`);
+  return res.json({ results: finalResults });
 });
+
 
 
 
